@@ -1,0 +1,15 @@
+# Credentials never live in this file.
+# `uri_env` names the environment variable holding the connection URI.
+
+[migrations]
+path = "{{migrations_path}}"
+collection = "_mongor_migrations"
+
+[environments.dev]
+uri_env = "MONGO_DEV_URI"
+database = "myapp_dev"
+
+# [environments.prod]
+# uri_env = "MONGO_PROD_URI"
+# database = "myapp"
+# require_confirm = true
