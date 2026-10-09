@@ -1,0 +1,14 @@
+# Local MongoDB for developing and testing mongor.
+#
+# Deliberately minimal:
+#   - no auth      -> no credentials in your shell history
+#   - no volume    -> `docker compose down` gives you a clean database
+#   - standalone   -> single-document atomicity is enough for the migration
+#                     lock; switch to a single-node replica set only if we
+#                     ever need multi-document transactions
+services:
+  mongo:
+    image: mongo:8
+    container_name: mongor-mongo
+    ports:
+      - "27017:27017"
