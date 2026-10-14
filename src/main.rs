@@ -41,6 +41,14 @@ struct MigrationsConfig {
     collection: String,
 }
 
+#[derive(Debug)]
+struct Migration {
+    version: u32,
+    name: String,
+    file_name: String,
+    path: PathBuf,
+}
+
 // cargo run -- init --migrations-dir migrations_dir
 // cargo run -- new migration_name
 fn main() -> Result<()> {
@@ -52,7 +60,21 @@ fn main() -> Result<()> {
             let config = load_config()?;
             new_migration(name, &config.migrations.path)?;
         }
-        Commands::Status => println!("status"),
+        Commands::Status => {
+            let config = load_config()?;
+            let migrations = discover_migrations(&config.migrations.path)?;
+
+            if migrations.is_empty() {
+                println!(
+                    "No migrations found in {}",
+                    config.migrations.path.display()
+                );
+            }
+
+            for m in &migrations {
+                println!("{:04} {}", m.version, m.name);
+            }
+        }
         Commands::Migrate => println!("migrate"),
     }
 
@@ -102,28 +124,59 @@ fn load_config() -> Result<Config> {
     Ok(config)
 }
 
-fn parse_version(file_name: &str) -> Option<u32> {
+fn parse_migration(file_name: &str) -> Option<(u32, &str)> {
     let rest = file_name.strip_prefix('V')?;
-    let (version, _) = rest.split_once("__")?;
-    version.parse().ok()
+    let (version, reminder) = rest.split_once("__")?;
+    let name = reminder.strip_suffix(".js")?;
+    Some((version.parse().ok()?, name))
 }
 
-fn next_version(migrations_dir: &Path) -> Result<u32> {
-    let mut highest = 0;
-
+fn discover_migrations(migrations_dir: &Path) -> Result<Vec<Migration>> {
     let entries = fs::read_dir(migrations_dir)
         .with_context(|| format!("failed to read {}", migrations_dir.display()))?;
+
+    let mut migrations = Vec::new();
 
     for entry in entries {
         let entry =
             entry.with_context(|| format!("failed to read {}", migrations_dir.display()))?;
 
-        if let Some(version) = entry.file_name().to_str().and_then(parse_version) {
-            highest = highest.max(version);
+        let os_name = entry.file_name();
+        let Some(file_name) = os_name.to_str() else {
+            continue;
+        };
+
+        let Some((version, name)) = parse_migration(file_name) else {
+            continue;
+        };
+
+        migrations.push(Migration {
+            version,
+            name: name.to_string(),
+            file_name: file_name.to_string(),
+            path: entry.path(),
+        })
+    }
+
+    migrations.sort_by_key(|m| m.version);
+
+    for pair in migrations.windows(2) {
+        if pair[0].version == pair[1].version {
+            anyhow::bail!(
+                "duplicate migration version {:04}: {} and {}",
+                pair[0].version,
+                pair[0].file_name,
+                pair[1].file_name
+            );
         }
     }
 
-    Ok(highest + 1)
+    Ok(migrations)
+}
+
+fn next_version(migrations_dir: &Path) -> Result<u32> {
+    let migrations = discover_migrations(migrations_dir)?;
+    Ok(migrations.last().map_or(1, |m| m.version + 1))
 }
 
 fn new_migration(name: &str, migrations_dir: &Path) -> Result<()> {

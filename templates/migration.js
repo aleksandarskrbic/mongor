@@ -1,0 +1,1 @@
+await db.example.createIndex({field: 1});
