@@ -1,6 +1,7 @@
 mod cli;
 mod config;
 mod migration;
+mod mongo;
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -14,7 +15,8 @@ use crate::cli::{Cli, Commands};
 // cargo run -- init --migrations-dir migrations
 // cargo run -- new migration_name
 // cargo run -- status
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match &cli.command {
@@ -28,10 +30,11 @@ fn main() -> Result<()> {
         Commands::Status { env } => {
             let cfg = config::load()?;
             let environment = cfg.environment(env)?;
-            let _uri = config::resolve_uri(environment)?;
+            let uri = config::resolve_uri(environment)?;
+            let db = mongo::connect(&uri, &environment.database).await?;
 
             println!("environment  {env}");
-            println!("database     {}", environment.database);
+            println!("database     {}", db.name());
             println!();
 
             let migrations = migration::discover(&cfg.migrations.path)?;
