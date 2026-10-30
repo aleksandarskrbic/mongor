@@ -56,7 +56,7 @@ default_env = "dev"
 
 [migrations]
 path = "migrations"
-collection = "_mongor_migrations"
+collection = "mongor_migrations"
 
 [environments.dev]
 uri_env = "MONGO_DEV_URI"

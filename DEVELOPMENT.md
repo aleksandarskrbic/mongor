@@ -55,7 +55,7 @@ Poke at the database directly:
 ```sh
 mongosh "mongodb://localhost:27017/myapp_dev"
 # show collections
-# db._mongor_migrations.find()
+# db.mongor_migrations.find()
 ```
 
 ## Testing the CLI by hand

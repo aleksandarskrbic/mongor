@@ -1243,6 +1243,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "clap",
+ "futures-util",
  "mongodb",
  "serde",
  "sha2 0.10.9",

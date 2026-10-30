@@ -31,18 +31,32 @@ async fn main() -> Result<()> {
             let cfg = config::load()?;
             let environment = cfg.environment(env)?;
             let uri = config::resolve_uri(environment)?;
+
             let db = mongo::connect(&uri, &environment.database).await?;
+            let applied = mongo::applied(&db, &cfg.migrations.collection).await?;
+            let migrations = migration::discover(&cfg.migrations.path)?;
 
             println!("environment  {env}");
             println!("database     {}", db.name());
             println!();
 
-            let migrations = migration::discover(&cfg.migrations.path)?;
             if migrations.is_empty() {
                 println!("no migrations found in {}", cfg.migrations.path.display());
-            }
-            for m in &migrations {
-                println!("{:04}  {}", m.version, m.name);
+            } else {
+                println!("{:<9} {:<32} {}", "Version", "Migration", "Status");
+                for m in &migrations {
+                    let status = if applied.contains_key(&m.version) {
+                        "applied"
+                    } else {
+                        "pending"
+                    };
+                    println!(
+                        "{:<9} {:<32} {}",
+                        format!("{:04}", m.version),
+                        m.name,
+                        status
+                    );
+                }
             }
         }
 
