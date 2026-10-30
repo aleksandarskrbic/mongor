@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 use std::path::PathBuf;
 
 // `about` pulls the description from Cargo.toml, so --help and crates.io agree.
@@ -12,11 +12,7 @@ pub struct Cli {
 #[derive(Subcommand)]
 pub enum Commands {
     /// Create mongor.toml and a migrations directory
-    Init {
-        /// Directory that will hold migration files
-        #[arg(long, default_value = "migrations")]
-        migrations_dir: PathBuf,
-    },
+    Init(InitArgs),
 
     /// Create a new migration file
     New {
@@ -37,4 +33,11 @@ pub enum Commands {
         #[arg(long)]
         env: String,
     },
+}
+
+#[derive(Args)]
+pub struct InitArgs {
+    /// Directory that will hold migration files
+    #[arg(long, default_value = "migrations")]
+    pub migrations_dir: PathBuf,
 }
