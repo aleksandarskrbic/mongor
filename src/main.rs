@@ -32,24 +32,32 @@ async fn main() -> Result<()> {
             let environment = cfg.environment(env)?;
             let uri = config::resolve_uri(environment)?;
 
-            let db = mongo::connect(&uri, &environment.database).await?;
-            let applied = mongo::applied(&db, &cfg.migrations.collection).await?;
+            let store =
+                mongo::Store::connect(&uri, &environment.database, &cfg.migrations.collection)
+                    .await?;
             let migrations = migration::discover(&cfg.migrations.path)?;
+            let applied = store.applied().await?;
 
             println!("environment  {env}");
-            println!("database     {}", db.name());
+            println!("database     {}", store.database_name());
             println!();
 
             if migrations.is_empty() {
                 println!("no migrations found in {}", cfg.migrations.path.display());
             } else {
-                println!("{:<9} {:<32} {}", "Version", "Migration", "Status");
+                println!("{:<9} {:<32} Status", "Version", "Migration");
                 for m in &migrations {
-                    let status = if applied.contains_key(&m.version) {
-                        "applied"
-                    } else {
-                        "pending"
+                    let status = match applied.get(&m.version) {
+                        Some(record) => {
+                            if m.checksum()? == record.checksum {
+                                "applied"
+                            } else {
+                                "MODIFIED"
+                            }
+                        }
+                        None => "pending",
                     };
+
                     println!(
                         "{:<9} {:<32} {}",
                         format!("{:04}", m.version),

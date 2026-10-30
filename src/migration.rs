@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use sha2::{Digest, Sha256};
 use std::fs;
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -12,6 +13,19 @@ pub struct Migration {
     pub name: String,
     pub file_name: String,
     pub path: PathBuf,
+}
+
+impl Migration {
+    /// SHA-256 of the file's raw bytes, as `sha256:<lowercase hex>`.
+    ///
+    /// The hex half matches `shasum -a 256 <file>`, so a user can verify by hand.
+    /// The prefix lets us change algorithm later without invalidating old records.
+    pub fn checksum(&self) -> Result<String> {
+        let bytes = fs::read(&self.path)
+            .with_context(|| format!("failed to read {}", self.path.display()))?;
+
+        Ok(format!("sha256:{:x}", Sha256::digest(&bytes)))
+    }
 }
 
 fn parse(file_name: &str) -> Option<(u32, &str)> {

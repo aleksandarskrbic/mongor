@@ -11,40 +11,51 @@ use std::time::Duration;
 pub struct MigrationRecord {
     version: u32,
     name: String,
-    checksum: String,
+    pub checksum: String,
 }
 
-pub fn records(db: &Database, collection: &str) -> Collection<MigrationRecord> {
-    db.collection(collection)
+pub struct Store {
+    db: Database,
+    migrations: Collection<MigrationRecord>,
 }
 
-pub async fn applied(db: &Database, collection: &str) -> Result<BTreeMap<u32, MigrationRecord>> {
-    let cursor = records(db, collection)
-        .find(doc! {})
-        .await
-        .with_context(|| format!("failed to query {}", collection))?;
+impl Store {
+    pub async fn connect(uri: &str, database: &str, collection: &str) -> Result<Store> {
+        let mut options = mongodb::options::ClientOptions::parse(uri)
+            .await
+            .context("invalid MongoDB connection URI")?;
+        options.app_name = Some("mongor".to_string());
+        options.server_selection_timeout = Some(Duration::from_secs(5));
 
-    let found: Vec<MigrationRecord> = cursor
-        .try_collect()
-        .await
-        .with_context(|| format!("failed to read {}", collection))?;
+        let client =
+            mongodb::Client::with_options(options).context("failed to create Mongo client")?;
+        let db = client.database(database);
 
-    Ok(found.into_iter().map(|r| (r.version, r)).collect())
-}
+        db.run_command(doc! { "ping": 1})
+            .await
+            .with_context(|| format!("failed to reach MongoDB for database `{database}`"))?;
 
-pub async fn connect(uri: &str, database: &str) -> Result<mongodb::Database> {
-    let mut options = mongodb::options::ClientOptions::parse(uri)
-        .await
-        .context("invalid MongoDB connection URI")?;
-    options.app_name = Some("mongor".to_string());
-    options.server_selection_timeout = Some(Duration::from_secs(5));
+        let migrations = db.collection(collection);
 
-    let client = mongodb::Client::with_options(options).context("failed to create Mongo client")?;
-    let db = client.database(database);
+        Ok(Store { db, migrations })
+    }
 
-    db.run_command(doc! { "ping": 1})
-        .await
-        .with_context(|| format!("failed to reach MongoDB for database `{database}`"))?;
+    pub fn database_name(&self) -> &str {
+        self.db.name()
+    }
 
-    Ok(db)
+    pub async fn applied(&self) -> Result<BTreeMap<u32, MigrationRecord>> {
+        let cursor = self
+            .migrations
+            .find(doc! {})
+            .await
+            .with_context(|| format!("failed to query {}", self.migrations.name()))?;
+
+        let found: Vec<MigrationRecord> = cursor
+            .try_collect()
+            .await
+            .with_context(|| format!("failed to read {}", self.migrations.name()))?;
+
+        Ok(found.into_iter().map(|r| (r.version, r)).collect())
+    }
 }
