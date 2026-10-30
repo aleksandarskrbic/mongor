@@ -2,6 +2,7 @@ mod cli;
 mod config;
 mod migration;
 mod mongo;
+mod mongosh;
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -40,6 +41,10 @@ async fn main() -> Result<()> {
 
             println!("environment  {env}");
             println!("database     {}", store.database_name());
+            match mongosh::Mongosh::resolve().await {
+                Ok(m) => println!("mongosh      {}", m.version()),
+                Err(e) => println!("mongosh      unavailable: {e:#}"),
+            }
             println!();
 
             if migrations.is_empty() {
