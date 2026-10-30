@@ -25,10 +25,16 @@ fn main() -> Result<()> {
             migration::create(name, &cfg.migrations.path)?;
         }
 
-        Commands::Status => {
+        Commands::Status { env } => {
             let cfg = config::load()?;
-            let migrations = migration::discover(&cfg.migrations.path)?;
+            let environment = cfg.environment(env)?;
+            let _uri = config::resolve_uri(environment)?;
 
+            println!("environment  {env}");
+            println!("database     {}", environment.database);
+            println!();
+
+            let migrations = migration::discover(&cfg.migrations.path)?;
             if migrations.is_empty() {
                 println!("no migrations found in {}", cfg.migrations.path.display());
             }
@@ -37,7 +43,7 @@ fn main() -> Result<()> {
             }
         }
 
-        Commands::Migrate => println!("migrate"),
+        Commands::Migrate { env } => println!("migrate {env}"),
     }
 
     Ok(())
