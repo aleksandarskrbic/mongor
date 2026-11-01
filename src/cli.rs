@@ -18,18 +18,10 @@ pub enum Commands {
     New(NewArgs),
 
     /// Show applied and pending migrations
-    Status {
-        /// Environment from mongor.toml to target
-        #[arg(long)]
-        env: String,
-    },
+    Status(StatusArgs),
 
     /// Apply all pending migrations
-    Migrate {
-        /// Environment from mongor.toml to target
-        #[arg(long)]
-        env: String,
-    },
+    Migrate(MigrateArgs),
 }
 
 #[derive(Args)]
@@ -43,4 +35,18 @@ pub struct InitArgs {
 pub struct NewArgs {
     /// Name of the migration, e.g. create_email_index
     pub name: String,
+}
+
+#[derive(Args)]
+pub struct StatusArgs {
+    /// Environment from mongor.toml to target
+    #[arg(long)]
+    pub env: String,
+}
+
+#[derive(Args)]
+pub struct MigrateArgs {
+    /// Environment from mongor.toml to target
+    #[arg(long)]
+    pub env: String,
 }
