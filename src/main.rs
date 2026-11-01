@@ -21,6 +21,6 @@ async fn main() -> Result<()> {
         Commands::Init(args) => Init::new(args.migrations_dir).run(),
         Commands::New(args) => NewMigration::new(args.name)?.run(),
         Commands::Status(args) => Status::new(args.env).await?.run().await,
-        Commands::Migrate(args) => Migrate::new(args.env).run().await,
+        Commands::Migrate(args) => Migrate::new(args.env).await?.run().await,
     }
 }
