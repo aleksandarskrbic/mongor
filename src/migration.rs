@@ -32,6 +32,11 @@ fn parse(file_name: &str) -> Option<(u32, &str)> {
     let rest = file_name.strip_prefix('V')?;
     let (version, remainder) = rest.split_once("__")?;
     let name = remainder.strip_suffix(".js")?;
+
+    if name.is_empty() || !version.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+
     Some((version.parse().ok()?, name))
 }
 
@@ -106,4 +111,53 @@ pub fn create(name: &str, migrations_dir: &Path) -> Result<()> {
 
     println!("created {}", path.display());
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_well_formed_file_names() {
+        let cases = [
+            ("V0001__create_email_index.js", 1, "create_email_index"),
+            ("V1__x.js", 1, "x"),
+            ("V0042__backfill_status.js", 42, "backfill_status"),
+            (
+                "V0010__name__with__underscores.js",
+                10,
+                "name__with__underscores",
+            ),
+        ];
+
+        for (file_name, version, name) in cases {
+            assert_eq!(
+                parse(file_name),
+                Some((version, name)),
+                "parsing {file_name}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_anything_that_is_not_a_migration() {
+        let cases = [
+            "U0001__create_email_index.js", // a rollback file, not a migration
+            "0001__missing_prefix.js",
+            "V0001_single_underscore.js",
+            "Vabc__not_a_number.js",
+            "V-1__negative.js",
+            "V99999999999__overflows_u32.js",
+            "V0001__wrong_extension.txt",
+            "V0001__double_extension.js.bak",
+            "V+1__leading_plus.js",
+            "V0001__.js",
+            "README.md",
+            "",
+        ];
+
+        for file_name in cases {
+            assert_eq!(parse(file_name), None, "should reject {file_name}");
+        }
+    }
 }
