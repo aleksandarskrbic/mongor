@@ -1,7 +1,8 @@
-use crate::mongo::Store;
+use crate::mongo::{MigrationStatus, Store};
 use crate::mongosh::Mongosh;
 use crate::{config, migration};
 use anyhow::Result;
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 /// Reports which migrations are applied, pending, or modified since they ran.
@@ -52,18 +53,35 @@ impl Status {
         }
 
         let applied = self.store.applied().await?;
+        let baseline = self.store.baseline().await?;
+
+        let unfinished: BTreeMap<u32, MigrationStatus> = self
+            .store
+            .unfinished()
+            .await?
+            .into_iter()
+            .map(|r| (r.version, r.status))
+            .collect();
 
         println!("{:<9} {:<32} Status", "Version", "Migration");
         for m in &migrations {
-            let status = match applied.get(&m.version) {
-                Some(record) => {
-                    if m.checksum()? == record.checksum {
-                        "applied"
-                    } else {
-                        "MODIFIED"
-                    }
+            let status = if let Some(record) = applied.get(&m.version) {
+                if m.checksum()? == record.checksum {
+                    "applied"
+                } else {
+                    "MODIFIED"
                 }
-                None => "pending",
+            } else if let Some(status) = unfinished.get(&m.version) {
+                match status {
+                    MigrationStatus::Running => "RUNNING",
+                    MigrationStatus::Failed => "FAILED",
+                    // unfinished() returns neither of these.
+                    MigrationStatus::Success | MigrationStatus::Baseline => "pending",
+                }
+            } else if baseline.is_some_and(|version| m.version <= version) {
+                "baseline"
+            } else {
+                "pending"
             };
 
             println!(

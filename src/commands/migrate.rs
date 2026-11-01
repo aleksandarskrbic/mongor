@@ -49,9 +49,15 @@ impl Migrate {
         let applied = self.store.applied().await?;
         self.verify_applied(&migrations, &applied)?;
 
+        let baseline = self.store.baseline().await?;
+        if let Some(version) = baseline {
+            println!("baseline is {version:04}, so earlier migrations are skipped");
+        }
+
         let pending: Vec<&Migration> = migrations
             .iter()
             .filter(|m| !applied.contains_key(&m.version))
+            .filter(|m| baseline.is_none_or(|version| m.version > version))
             .collect();
 
         if pending.is_empty() {
@@ -153,7 +159,8 @@ impl Migrate {
                     timestamp(record.started_at)
                 ),
                 MigrationStatus::Failed => format!("failed at {}", timestamp(record.started_at)),
-                MigrationStatus::Success => continue,
+                // unfinished() cannot return either of these.
+                MigrationStatus::Success | MigrationStatus::Baseline => continue,
             };
 
             lines.push(format!(

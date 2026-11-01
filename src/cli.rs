@@ -22,6 +22,9 @@ pub enum Commands {
 
     /// Apply all pending migrations
     Migrate(MigrateArgs),
+
+    /// Adopt a database that already has the schema, without running anything
+    Baseline(BaselineArgs),
 }
 
 #[derive(Args)]
@@ -49,4 +52,15 @@ pub struct MigrateArgs {
     /// Environment from mongor.toml to target
     #[arg(long)]
     pub env: String,
+}
+
+#[derive(Args)]
+pub struct BaselineArgs {
+    /// Environment from mongor.toml to target
+    #[arg(long)]
+    pub env: String,
+
+    /// Highest version to assume applied; defaults to the newest file on disk
+    #[arg(long)]
+    pub version: Option<u32>,
 }

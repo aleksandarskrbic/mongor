@@ -14,6 +14,9 @@ pub enum MigrationStatus {
     Running,
     Success,
     Failed,
+    /// A marker, not a migration: every version up to and including this one is
+    /// assumed to be already applied, and will never be run.
+    Baseline,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -112,7 +115,10 @@ impl Store {
     pub async fn unfinished(&self) -> Result<Vec<MigrationRecord>> {
         let cursor = self
             .migrations
-            .find(doc! { "status": { "$ne": to_bson(&MigrationStatus::Success)? } })
+            .find(doc! { "status": { "$in": [
+                to_bson(&MigrationStatus::Running)?,
+                to_bson(&MigrationStatus::Failed)?,
+            ] } })
             .sort(doc! { "version": 1 })
             .await
             .with_context(|| format!("failed to query {}", self.migrations.name()))?;
@@ -121,6 +127,50 @@ impl Store {
             .try_collect()
             .await
             .with_context(|| format!("failed to read {}", self.migrations.name()))
+    }
+
+    pub async fn is_empty(&self) -> Result<bool> {
+        let count = self
+            .migrations
+            .count_documents(doc! {})
+            .await
+            .with_context(|| format!("failed to query {}", self.migrations.name()))?;
+
+        Ok(count == 0)
+    }
+
+    /// The baselined version, if this database was adopted rather than built
+    /// from scratch.
+    pub async fn baseline(&self) -> Result<Option<u32>> {
+        let record = self
+            .migrations
+            .find_one(doc! { "status": to_bson(&MigrationStatus::Baseline)? })
+            .await
+            .with_context(|| format!("failed to query {}", self.migrations.name()))?;
+
+        Ok(record.map(|r| r.version))
+    }
+
+    /// Writes the marker row. The record has no checksum because no file was
+    /// ever run: the row says "assume this was already done", nothing more.
+    pub async fn set_baseline(&self, version: u32) -> Result<()> {
+        let record = MigrationRecord {
+            version,
+            name: "baseline".to_string(),
+            file_name: "baseline".to_string(),
+            checksum: String::new(),
+            status: MigrationStatus::Baseline,
+            started_at: DateTime::now(),
+            finished_at: None,
+            execution_time_ms: None,
+        };
+
+        self.migrations
+            .insert_one(&record)
+            .await
+            .with_context(|| format!("failed to write baseline to {}", self.migrations.name()))?;
+
+        Ok(())
     }
 
     /// Migrations that ran to completion, keyed by version. Rows still `running`

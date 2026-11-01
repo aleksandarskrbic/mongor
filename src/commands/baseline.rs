@@ -1,0 +1,68 @@
+use crate::mongo::Store;
+use crate::{config, migration};
+use anyhow::{Result, bail};
+use std::path::PathBuf;
+
+/// Marks a database that already has the schema as being up to date, so the
+/// migrations that built it are never run against it.
+pub struct Baseline {
+    env: String,
+    store: Store,
+    migrations_dir: PathBuf,
+    version: Option<u32>,
+}
+
+impl Baseline {
+    pub async fn new(env: String, version: Option<u32>) -> Result<Self> {
+        let cfg = config::load()?;
+        let environment = cfg.environment(&env)?;
+        let uri = config::resolve_uri(environment)?;
+
+        let store = Store::connect(&uri, &environment.database, &cfg.migrations.collection).await?;
+
+        Ok(Self {
+            env,
+            store,
+            migrations_dir: cfg.migrations.path,
+            version,
+        })
+    }
+
+    pub async fn run(&self) -> Result<()> {
+        // Baselining a database mongor already tracks would hide migrations it
+        // has a record of running, so it is refused rather than merged.
+        if !self.store.is_empty().await? {
+            bail!(
+                "{} already has migration history in {} - baseline is only for adopting a database mongor has never touched",
+                self.store.database_name(),
+                self.store.collection_name()
+            );
+        }
+
+        let version = self.resolve_version()?;
+        self.store.set_baseline(version).await?;
+
+        println!(
+            "baselined {} ({}) at {version:04}",
+            self.env,
+            self.store.database_name()
+        );
+        println!("migrations up to {version:04} will never run against it");
+        Ok(())
+    }
+
+    fn resolve_version(&self) -> Result<u32> {
+        if let Some(version) = self.version {
+            return Ok(version);
+        }
+
+        let migrations = migration::discover(&self.migrations_dir)?;
+        match migrations.last() {
+            Some(m) => Ok(m.version),
+            None => bail!(
+                "no migrations found in {} — pass --version to baseline anyway",
+                self.migrations_dir.display()
+            ),
+        }
+    }
+}
