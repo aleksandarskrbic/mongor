@@ -1,17 +1,22 @@
 use anyhow::{Context, Result};
 use futures_util::TryStreamExt;
-use mongodb::bson::doc;
+use mongodb::bson::{DateTime, doc};
 use mongodb::{Collection, Database};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::time::Duration;
 
+/// One row of migration history. This is a stored format: renaming a field or
+/// changing `rename_all` invalidates every record already in the collection.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MigrationRecord {
-    version: u32,
-    name: String,
+    pub version: u32,
+    pub name: String,
+    pub file_name: String,
     pub checksum: String,
+    pub applied_at: DateTime,
+    pub execution_time_ms: i64,
 }
 
 pub struct Store {
@@ -42,6 +47,18 @@ impl Store {
 
     pub fn database_name(&self) -> &str {
         self.db.name()
+    }
+
+    pub async fn record(&self, record: &MigrationRecord) -> Result<()> {
+        self.migrations.insert_one(record).await.with_context(|| {
+            format!(
+                "failed to record {} in {}",
+                record.file_name,
+                self.migrations.name()
+            )
+        })?;
+
+        Ok(())
     }
 
     pub async fn applied(&self) -> Result<BTreeMap<u32, MigrationRecord>> {

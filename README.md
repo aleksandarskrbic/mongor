@@ -40,13 +40,18 @@ migrations/
 
 ```js
 // V001__create_email_index.js
-await db.users.createIndex({ email: 1 }, { unique: true });
+db.users.createIndex({ email: 1 }, { unique: true });
 ```
 
 ```js
 // U001__create_email_index.js
-await db.users.dropIndex("email_1");
+db.users.dropIndex("email_1");
 ```
+
+Scripts are ordinary mongosh JavaScript, executed with `db` already connected to
+the target environment's database. Do not use `await`: mongosh parses a
+`--file` script as a script rather than a module, so top-level `await` is a
+syntax error, and the shell API is awaited for you.
 
 ## Configuration
 
