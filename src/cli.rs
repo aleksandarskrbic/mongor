@@ -15,10 +15,7 @@ pub enum Commands {
     Init(InitArgs),
 
     /// Create a new migration file
-    New {
-        /// Name of the migration, e.g. create_email_index
-        name: String,
-    },
+    New(NewArgs),
 
     /// Show applied and pending migrations
     Status {
@@ -40,4 +37,10 @@ pub struct InitArgs {
     /// Directory that will hold migration files
     #[arg(long, default_value = "migrations")]
     pub migrations_dir: PathBuf,
+}
+
+#[derive(Args)]
+pub struct NewArgs {
+    /// Name of the migration, e.g. create_email_index
+    pub name: String,
 }

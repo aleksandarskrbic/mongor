@@ -9,7 +9,7 @@ use anyhow::Result;
 use clap::Parser;
 
 use crate::cli::{Cli, Commands};
-use crate::commands::Init;
+use crate::commands::{Init, NewMigration};
 
 // cargo run -- init --migrations-dir migrations
 // cargo run -- new migration_name
@@ -20,11 +20,7 @@ async fn main() -> Result<()> {
 
     match &cli.command {
         Commands::Init(args) => Init::new(args.migrations_dir.clone()).run()?,
-
-        Commands::New { name } => {
-            let cfg = config::load()?;
-            migration::create(name, &cfg.migrations.path)?;
-        }
+        Commands::New(args) => NewMigration::new(args.name.clone())?.run()?,
 
         Commands::Status { env } => {
             let cfg = config::load()?;
