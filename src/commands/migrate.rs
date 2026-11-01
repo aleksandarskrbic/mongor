@@ -38,6 +38,8 @@ impl Migrate {
     }
 
     pub async fn run(&self) -> Result<()> {
+        self.verify_nothing_unfinished().await?;
+
         let migrations = migration::discover(&self.migrations_dir)?;
         if migrations.is_empty() {
             println!("no migrations found in {}", self.migrations_dir.display());
@@ -128,6 +130,51 @@ impl Migrate {
         Ok(())
     }
 
+    /// Refuses to run while any row is `running` or `failed`. A migration that
+    /// did not finish may have changed the database, and MongoDB will not undo
+    /// it for us, so the only safe move is to stop and let a human look.
+    async fn verify_nothing_unfinished(&self) -> Result<()> {
+        let unfinished = self.store.unfinished().await?;
+        if unfinished.is_empty() {
+            return Ok(());
+        }
+
+        let mut lines = vec![format!(
+            "{} unfinished migration(s) in {}",
+            unfinished.len(),
+            self.store.collection_name()
+        )];
+
+        for record in &unfinished {
+            let detail = match record.status {
+                // Possibly still running: killing mongor does not kill mongosh.
+                MigrationStatus::Running => format!(
+                    "started {} and never finished - it may still be running",
+                    timestamp(record.started_at)
+                ),
+                MigrationStatus::Failed => format!("failed at {}", timestamp(record.started_at)),
+                MigrationStatus::Success => continue,
+            };
+
+            lines.push(format!(
+                "  {:04}  {}  {}",
+                record.version, record.file_name, detail
+            ));
+        }
+
+        lines.push(String::new());
+        lines.push("Inspect the database, then clear the row to retry:".to_string());
+        for record in &unfinished {
+            lines.push(format!(
+                "  db.getCollection(\"{}\").deleteOne({{ version: {} }})",
+                self.store.collection_name(),
+                record.version
+            ));
+        }
+
+        bail!("{}", lines.join("\n"))
+    }
+
     fn verify_applied(
         &self,
         migrations: &[Migration],
@@ -151,4 +198,10 @@ impl Migrate {
 
         Ok(())
     }
+}
+
+/// RFC 3339, so a timestamp in an error reads the same as one in the database.
+fn timestamp(at: DateTime) -> String {
+    at.try_to_rfc3339_string()
+        .unwrap_or_else(|_| at.to_string())
 }

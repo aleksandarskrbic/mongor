@@ -59,6 +59,10 @@ impl Store {
         self.db.name()
     }
 
+    pub fn collection_name(&self) -> &str {
+        self.migrations.name()
+    }
+
     /// Writes the row before the migration runs, replacing anything left by an
     /// earlier attempt: the history holds one row per version.
     pub async fn start(&self, record: &MigrationRecord) -> Result<()> {
@@ -101,6 +105,22 @@ impl Store {
             })?;
 
         Ok(())
+    }
+
+    /// Rows that are not `success`: a migration still running, or one that
+    /// failed. Either way the database may have been modified.
+    pub async fn unfinished(&self) -> Result<Vec<MigrationRecord>> {
+        let cursor = self
+            .migrations
+            .find(doc! { "status": { "$ne": to_bson(&MigrationStatus::Success)? } })
+            .sort(doc! { "version": 1 })
+            .await
+            .with_context(|| format!("failed to query {}", self.migrations.name()))?;
+
+        cursor
+            .try_collect()
+            .await
+            .with_context(|| format!("failed to read {}", self.migrations.name()))
     }
 
     /// Migrations that ran to completion, keyed by version. Rows still `running`
