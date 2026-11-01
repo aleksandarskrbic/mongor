@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use futures_util::TryStreamExt;
-use mongodb::bson::{DateTime, doc};
+use mongodb::bson::{DateTime, doc, to_bson};
 use mongodb::{Collection, Database};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -8,6 +8,14 @@ use std::time::Duration;
 
 /// One row of migration history. This is a stored format: renaming a field or
 /// changing `rename_all` invalidates every record already in the collection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MigrationStatus {
+    Running,
+    Success,
+    Failed,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MigrationRecord {
@@ -15,8 +23,10 @@ pub struct MigrationRecord {
     pub name: String,
     pub file_name: String,
     pub checksum: String,
-    pub applied_at: DateTime,
-    pub execution_time_ms: i64,
+    pub status: MigrationStatus,
+    pub started_at: DateTime,
+    pub finished_at: Option<DateTime>,
+    pub execution_time_ms: Option<i64>,
 }
 
 pub struct Store {
@@ -49,22 +59,56 @@ impl Store {
         self.db.name()
     }
 
-    pub async fn record(&self, record: &MigrationRecord) -> Result<()> {
-        self.migrations.insert_one(record).await.with_context(|| {
-            format!(
-                "failed to record {} in {}",
-                record.file_name,
-                self.migrations.name()
-            )
-        })?;
+    /// Writes the row before the migration runs, replacing anything left by an
+    /// earlier attempt: the history holds one row per version.
+    pub async fn start(&self, record: &MigrationRecord) -> Result<()> {
+        self.migrations
+            .replace_one(doc! { "version": record.version }, record)
+            .upsert(true)
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to record {} in {}",
+                    record.file_name,
+                    self.migrations.name()
+                )
+            })?;
 
         Ok(())
     }
 
+    pub async fn finish(
+        &self,
+        version: u32,
+        status: MigrationStatus,
+        execution_time_ms: i64,
+    ) -> Result<()> {
+        self.migrations
+            .update_one(
+                doc! { "version": version },
+                doc! { "$set": {
+                    "status": to_bson(&status)?,
+                    "finishedAt": DateTime::now(),
+                    "executionTimeMs": execution_time_ms,
+                }},
+            )
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to update {version:04} in {}",
+                    self.migrations.name()
+                )
+            })?;
+
+        Ok(())
+    }
+
+    /// Migrations that ran to completion, keyed by version. Rows still `running`
+    /// or left `failed` are absent: they are attempts, not history.
     pub async fn applied(&self) -> Result<BTreeMap<u32, MigrationRecord>> {
         let cursor = self
             .migrations
-            .find(doc! {})
+            .find(doc! { "status": to_bson(&MigrationStatus::Success)? })
             .await
             .with_context(|| format!("failed to query {}", self.migrations.name()))?;
 

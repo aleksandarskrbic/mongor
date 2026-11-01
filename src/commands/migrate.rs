@@ -1,5 +1,5 @@
 use crate::migration::Migration;
-use crate::mongo::{MigrationRecord, Store};
+use crate::mongo::{MigrationRecord, MigrationStatus, Store};
 use crate::mongosh::Mongosh;
 use crate::{config, migration};
 use anyhow::{Context, Result, bail};
@@ -81,32 +81,50 @@ impl Migrate {
         let checksum = migration.checksum()?;
         println!("{:04}  {}", migration.version, migration.name);
 
-        let started = Instant::now();
-        self.mongosh
-            .run_script(&migration.path, &self.uri, self.store.database_name())
-            .await
-            .with_context(|| {
-                format!(
-                    "{} failed, leaving the database in an unknown state",
-                    migration.file_name
-                )
-            })?;
-
         let record = MigrationRecord {
             version: migration.version,
             name: migration.name.clone(),
             file_name: migration.file_name.clone(),
             checksum,
-            applied_at: DateTime::now(),
-            execution_time_ms: started.elapsed().as_millis().try_into().unwrap_or(i64::MAX),
+            status: MigrationStatus::Running,
+            started_at: DateTime::now(),
+            finished_at: None,
+            execution_time_ms: None,
         };
 
-        self.store
-            .record(&record)
-            .await
-            .with_context(|| format!("{} ran but was not recorded", migration.file_name))?;
+        // Written before the script runs: if we lose the process mid-migration,
+        // this row is the only evidence the database may have been touched.
+        self.store.start(&record).await?;
 
-        println!("  ok in {} ms", record.execution_time_ms);
+        let started = Instant::now();
+        let outcome = self
+            .mongosh
+            .run_script(&migration.path, &self.uri, self.store.database_name())
+            .await;
+        let elapsed = started.elapsed().as_millis().try_into().unwrap_or(i64::MAX);
+
+        let status = if outcome.is_ok() {
+            MigrationStatus::Success
+        } else {
+            MigrationStatus::Failed
+        };
+        let recorded = self.store.finish(migration.version, status, elapsed).await;
+
+        // The script's own failure is the more useful of the two errors.
+        outcome.with_context(|| {
+            format!(
+                "{} failed, leaving the database in an unknown state",
+                migration.file_name
+            )
+        })?;
+        recorded.with_context(|| {
+            format!(
+                "{} ran but the result was not recorded",
+                migration.file_name
+            )
+        })?;
+
+        println!("  ok in {elapsed} ms");
         Ok(())
     }
 
