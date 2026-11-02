@@ -5,6 +5,7 @@ use crate::{config, migration};
 use anyhow::{Context, Result, bail};
 use mongodb::bson::DateTime;
 use std::collections::BTreeMap;
+use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
 use std::time::Instant;
 
@@ -15,10 +16,11 @@ pub struct Migrate {
     store: Store,
     mongosh: Mongosh,
     migrations_dir: PathBuf,
+    yes: bool,
 }
 
 impl Migrate {
-    pub async fn new(env: String) -> Result<Self> {
+    pub async fn new(env: String, yes: bool) -> Result<Self> {
         let cfg = config::load()?;
         let environment = cfg.environment(&env)?;
         let uri = config::resolve_uri(environment)?;
@@ -34,6 +36,7 @@ impl Migrate {
             store,
             mongosh,
             migrations_dir: cfg.migrations.path,
+            yes,
         })
     }
 
@@ -72,12 +75,29 @@ impl Migrate {
         self.verify_pending(&pending)?;
 
         println!(
-            "applying {} migration(s) to {} ({})",
+            "{} migration(s) pending for {} ({})",
             pending.len(),
             self.env,
             self.store.database_name()
         );
 
+        // Listed only when we are about to ask: the apply loop below names each
+        // migration as it runs, so printing them twice is noise. The count above
+        // is what an interrupted unattended run still needs.
+        if !self.yes {
+            println!();
+            for m in &pending {
+                println!("  {:05}  {}", m.version, m.name);
+            }
+            println!();
+
+            confirm(&format!(
+                "Do you want to apply these {} migration(s)?",
+                pending.len()
+            ))?;
+        }
+
+        println!();
         for m in &pending {
             self.apply(m).await?;
         }
@@ -177,4 +197,35 @@ impl Migrate {
 
         Ok(())
     }
+}
+
+/// Blocks until the operator types `yes`.
+///
+/// Only the exact word is accepted: `y` and a bare newline are easy to type by
+/// reflex, which is the opposite of what a confirmation is for.
+fn confirm(question: &str) -> Result<()> {
+    // Refusing beats prompting when nobody can answer. In CI stdin is a pipe,
+    // and a prompt there would hang until the job timed out.
+    if !std::io::stdin().is_terminal() {
+        bail!("{question}\n  stdin is not a terminal - pass --yes to apply without confirming");
+    }
+
+    print!("{question}\n  Only `yes` will be accepted.\n\n  Enter a value: ");
+
+    // stdout is line buffered and the prompt has no newline, so without this
+    // flush the question would appear after the answer was typed.
+    std::io::stdout().flush()?;
+
+    // Blocking read inside an async fn. Nothing else is running on the runtime
+    // while we wait for a human, so spawn_blocking would only add noise.
+    let mut answer = String::new();
+    // No newline of our own: we only read when stdin is a terminal, and the
+    // terminal already echoed the one the operator typed.
+    std::io::stdin().read_line(&mut answer)?;
+
+    if answer.trim() != "yes" {
+        bail!("cancelled");
+    }
+
+    Ok(())
 }

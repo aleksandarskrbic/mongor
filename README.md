@@ -76,7 +76,6 @@ database = "myapp_dev"
 [environments.prod]
 uri_env = "MONGO_PROD_URI"
 database = "myapp"
-require_confirm = true
 ```
 
 Credentials never live in the config file — only the *name* of the environment
@@ -93,9 +92,18 @@ export MONGO_PROD_URI="mongodb://..."
 | `mongor init` | Create `mongor.toml` and `migrations/` | yes |
 | `mongor new <name>` | Create the next `.up.js` and its `.down.js` | yes |
 | `mongor status` | Compare local files against applied history | yes |
-| `mongor migrate` | Apply pending migrations | yes |
+| `mongor migrate` | Apply pending migrations (`--yes` to skip the prompt) | yes |
 | `mongor rollback` | Run the matching `.down.js` for the latest migration | yes |
 | `mongor baseline` | Adopt a database that already has the schema | yes |
+
+`mongor migrate` prints what it is about to apply and then asks you to type
+`yes`, the way `terraform apply` does. In a pipeline, where there is nobody to
+answer, it refuses rather than hanging — pass `--yes` to apply unattended:
+
+```sh
+mongor migrate --env prod            # prints the plan, waits for `yes`
+mongor migrate --env prod --yes      # applies straight away, for CI
+```
 
 ## Design notes
 

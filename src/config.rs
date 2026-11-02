@@ -26,8 +26,6 @@ pub struct MigrationsConfig {
 pub struct Environment {
     pub uri_env: String,
     pub database: String,
-    #[serde(default)]
-    pub require_confirm: bool,
 }
 
 impl Config {

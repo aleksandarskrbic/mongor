@@ -145,7 +145,8 @@ docker compose up -d
 cd sandbox
 export MONGO_DEV_URI="mongodb://localhost:27017"
 ../target/debug/mongor status --env dev      # three pending
-../target/debug/mongor migrate --env dev     # applies all three
+../target/debug/mongor migrate --env dev     # plan, then type `yes`
+../target/debug/mongor migrate --env dev --yes  # or skip the prompt
 ../target/debug/mongor rollback --env dev    # refused: 0003 has no rollback
 ```
 

@@ -12,4 +12,3 @@ database = "myapp_dev"
 # [environments.prod]
 # uri_env = "MONGO_PROD_URI"
 # database = "myapp"
-# require_confirm = true

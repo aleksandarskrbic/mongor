@@ -55,6 +55,10 @@ pub struct MigrateArgs {
     /// Environment from mongor.toml to target
     #[arg(long)]
     pub env: String,
+
+    /// Apply without asking for confirmation
+    #[arg(long)]
+    pub yes: bool,
 }
 
 #[derive(Args)]
