@@ -63,34 +63,47 @@ impl Status {
             .map(|r| (r.version, r.status))
             .collect();
 
-        println!("{:<9} {:<32} Status", "Version", "Migration");
+        println!("  {:<9} {:<32} Status", "Version", "Migration");
+
+        // Severity travels in its own column rather than in the label's casing:
+        // every status reads the same way, and `!` marks the rows a human has to
+        // deal with before `migrate` will run again.
+        let mut marked = false;
         for m in &migrations {
-            let status = if let Some(record) = applied.get(&m.version) {
+            let (status, attention) = if let Some(record) = applied.get(&m.version) {
                 if m.checksum()? == record.checksum {
-                    "applied"
+                    ("applied", false)
                 } else {
-                    "MODIFIED"
+                    ("modified", true)
                 }
             } else if let Some(status) = unfinished.get(&m.version) {
                 match status {
-                    MigrationStatus::Running => "RUNNING",
-                    MigrationStatus::RollingBack => "ROLLING BACK",
-                    MigrationStatus::Failed => "FAILED",
-                    // unfinished() returns neither of these.
-                    MigrationStatus::Success | MigrationStatus::Baseline => "pending",
+                    MigrationStatus::Running => ("running", true),
+                    MigrationStatus::RollingBack => ("rolling back", true),
+                    MigrationStatus::Failed => ("failed", true),
+                    // unfinished() returns neither of these, so there is no
+                    // honest label - say so rather than invent a plausible one.
+                    MigrationStatus::Success | MigrationStatus::Baseline => ("unknown", true),
                 }
             } else if baseline.is_some_and(|version| m.version <= version) {
-                "baseline"
+                ("baseline", false)
             } else {
-                "pending"
+                ("pending", false)
             };
 
+            marked |= attention;
             println!(
-                "{:<9} {:<32} {}",
+                "{} {:<9} {:<32} {}",
+                if attention { "!" } else { " " },
                 format!("{:05}", m.version),
                 m.name,
                 status
             );
+        }
+
+        if marked {
+            println!();
+            println!("! needs attention - migrate will refuse until it is resolved");
         }
 
         Ok(())
