@@ -29,22 +29,28 @@ scripts. A migration file is a normal `mongosh` script that runs fine on its own
 
 ## Migrations
 
-Forward migrations are `V`-prefixed, rollbacks are `U`-prefixed and optional.
+Migrations are `<version>_<name>.up.js`, rollbacks `<version>_<name>.down.js`.
+`mongor new` writes both, so a missing rollback is visible in review. A
+`.down.js` that is only comments means the migration cannot be undone, and
+`mongor rollback` refuses it rather than reporting a rollback that did nothing.
 
 ```
 migrations/
-├── V001__create_email_index.js
-├── U001__create_email_index.js
-└── V002__backfill_status.js
+├── 00001_create_email_index.down.js
+├── 00001_create_email_index.up.js
+└── 00002_backfill_status.up.js
 ```
 
+The version leads the name, so a migration and its rollback sort next to each
+other however many you have.
+
 ```js
-// V001__create_email_index.js
+// 00001_create_email_index.up.js
 db.users.createIndex({ email: 1 }, { unique: true });
 ```
 
 ```js
-// U001__create_email_index.js
+// 00001_create_email_index.down.js
 db.users.dropIndex("email_1");
 ```
 
@@ -84,11 +90,12 @@ export MONGO_PROD_URI="mongodb://..."
 
 | Command | Description | Status |
 | --- | --- | --- |
-| `mongor init` | Create `mongor.toml` and `migrations/` | planned |
-| `mongor new <name>` | Create the next `V<nnn>__<name>.js` | planned |
-| `mongor status` | Compare local files against applied history | planned |
-| `mongor migrate` | Apply pending migrations | planned |
-| `mongor rollback` | Run the matching `U` file for the latest migration | planned |
+| `mongor init` | Create `mongor.toml` and `migrations/` | yes |
+| `mongor new <name>` | Create the next `.up.js` and its `.down.js` | yes |
+| `mongor status` | Compare local files against applied history | yes |
+| `mongor migrate` | Apply pending migrations | yes |
+| `mongor rollback` | Run the matching `.down.js` for the latest migration | yes |
+| `mongor baseline` | Adopt a database that already has the schema | yes |
 
 ## Design notes
 

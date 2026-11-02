@@ -65,8 +65,7 @@ Cargo finds `Cargo.toml` by walking up. So work inside `sandbox/` (gitignored)
 to keep scaffolding out of the repo root:
 
 ```sh
-mkdir -p sandbox && cd sandbox
-cargo run -- init
+./scripts/sandbox-reset.sh && cd sandbox
 ```
 
 Everything below assumes you are in `sandbox/`.
@@ -86,13 +85,16 @@ Flag names are kebab-case: the field `migrations_dir` becomes
 ### `mongor new <name>`
 
 Reads `[migrations] path` from `mongor.toml`, scans for the highest existing
-`V` version, and writes the next one.
+`.up.js` version, and writes the next pair.
 
 ```sh
-cargo run -- new create_email_index     # -> V0001__create_email_index.js
-cargo run -- new add_status_field       # -> V0002__add_status_field.js
+cargo run -- new create_email_index     # -> 00001_create_email_index.{up,down}.js
+cargo run -- new add_status_field       # -> 00002_add_status_field.{up,down}.js
 ls migrations/
 ```
+
+Both directions are written every time. A `.down.js` left as generated counts
+as "no rollback": `mongor rollback` refuses it instead of running a no-op.
 
 Rejected input (creates nothing, exits non-zero):
 
@@ -104,41 +106,54 @@ cargo run -- new ../../etc/passwd       # path traversal
 Version scanning is numeric, not lexicographic:
 
 ```sh
-touch migrations/V0009__manual.js
-cargo run -- new after_manual           # -> V0010__after_manual.js, not V0003
+touch migrations/00009_manual.up.js
+cargo run -- new after_manual           # -> 00010_after_manual.up.js, not 00003
 ```
 
-### `mongor status` / `mongor migrate`
+### `mongor status`, `migrate`, `rollback`, `baseline`
 
-Stubs. They print their own name and do nothing yet.
+These need a database, so use the scripts below rather than setting the
+sandbox up by hand.
+
+## Sandbox scripts
 
 ```sh
-cargo run -- status
-cargo run -- migrate
+./scripts/sandbox-reset.sh     # drop the database, wipe sandbox/, mongor init
+./scripts/sandbox-seed.sh      # three migrations, two with rollbacks, plus data
+source scripts/sandbox-env.sh  # just export MONGO_DEV_URI in your own shell
 ```
+
+`sandbox-reset.sh` scaffolds with the real `mongor init`, so the sandbox config
+is whatever `templates/mongor.toml` currently produces. `sandbox-seed.sh`
+creates its files with `mongor new`, for the same reason.
+
+Settings live in `scripts/sandbox-env.sh` and can be overridden by exporting
+them first:
+
+| Variable | Default | Note |
+| --- | --- | --- |
+| `MONGO_HOST` | `mongodb://localhost:27017` | no database in the path, on purpose |
+| `SANDBOX_DB` | `myapp_dev` | must match `templates/mongor.toml` |
 
 ## End-to-end smoke test
 
-From the repo root, a clean run of everything that currently works:
-
 ```sh
 docker compose up -d
-export MONGO_DEV_URI="mongodb://localhost:27017"
+./scripts/sandbox-reset.sh
+./scripts/sandbox-seed.sh
 
-rm -rf sandbox && mkdir -p sandbox && cd sandbox
-cargo run -- init
-cargo run -- new create_email_index
-cargo run -- new backfill_status
-ls -la migrations/
-cat mongor.toml
-cd ..
+cd sandbox
+export MONGO_DEV_URI="mongodb://localhost:27017"
+../target/debug/mongor status --env dev      # three pending
+../target/debug/mongor migrate --env dev     # applies all three
+../target/debug/mongor rollback --env dev    # refused: 0003 has no rollback
 ```
 
 ## Resetting state
 
 ```sh
-docker compose down            # wipe the database
-rm -rf sandbox                 # wipe scaffolded files
+./scripts/sandbox-reset.sh     # database + sandbox files
+docker compose down            # stop MongoDB and discard everything
 cargo clean                    # wipe build artifacts
 ```
 
