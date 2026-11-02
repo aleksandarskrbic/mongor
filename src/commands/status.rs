@@ -74,6 +74,7 @@ impl Status {
             } else if let Some(status) = unfinished.get(&m.version) {
                 match status {
                     MigrationStatus::Running => "RUNNING",
+                    MigrationStatus::RollingBack => "ROLLING BACK",
                     MigrationStatus::Failed => "FAILED",
                     // unfinished() returns neither of these.
                     MigrationStatus::Success | MigrationStatus::Baseline => "pending",
@@ -86,7 +87,7 @@ impl Status {
 
             println!(
                 "{:<9} {:<32} {}",
-                format!("{:04}", m.version),
+                format!("{:05}", m.version),
                 m.name,
                 status
             );

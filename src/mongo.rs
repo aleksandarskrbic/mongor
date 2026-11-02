@@ -1,6 +1,6 @@
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use futures_util::TryStreamExt;
-use mongodb::bson::{DateTime, doc, to_bson};
+use mongodb::bson::{Bson, DateTime, doc, to_bson};
 use mongodb::{Collection, Database};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -14,6 +14,8 @@ pub enum MigrationStatus {
     Running,
     Success,
     Failed,
+    /// Its rollback script was started and has not finished.
+    RollingBack,
     /// A marker, not a migration: every version up to and including this one is
     /// assumed to be already applied, and will never be run.
     Baseline,
@@ -102,7 +104,7 @@ impl Store {
             .await
             .with_context(|| {
                 format!(
-                    "failed to update {version:04} in {}",
+                    "failed to update {version:05} in {}",
                     self.migrations.name()
                 )
             })?;
@@ -117,6 +119,7 @@ impl Store {
             .migrations
             .find(doc! { "status": { "$in": [
                 to_bson(&MigrationStatus::Running)?,
+                to_bson(&MigrationStatus::RollingBack)?,
                 to_bson(&MigrationStatus::Failed)?,
             ] } })
             .sort(doc! { "version": 1 })
@@ -127,6 +130,126 @@ impl Store {
             .try_collect()
             .await
             .with_context(|| format!("failed to read {}", self.migrations.name()))
+    }
+
+    /// Refuses to go on while any row is unfinished. A script that did not
+    /// finish may have changed the database, and MongoDB will not undo it for
+    /// us, so the only safe move is to stop and let a human look.
+    pub async fn ensure_nothing_unfinished(&self) -> Result<()> {
+        let unfinished = self.unfinished().await?;
+        if unfinished.is_empty() {
+            return Ok(());
+        }
+
+        let collection = self.migrations.name();
+        let mut lines = vec![format!(
+            "{} unfinished migration(s) in {collection}",
+            unfinished.len()
+        )];
+
+        for record in &unfinished {
+            let detail = match record.status {
+                // Possibly still running: killing mongor does not kill mongosh.
+                MigrationStatus::Running => format!(
+                    "started {} and never finished - it may still be running",
+                    timestamp(record.started_at)
+                ),
+                MigrationStatus::RollingBack => format!(
+                    "was being rolled back at {} and never finished",
+                    timestamp(record.started_at)
+                ),
+                MigrationStatus::Failed => {
+                    format!("started {} and failed", timestamp(record.started_at))
+                }
+                // unfinished() cannot return either of these.
+                MigrationStatus::Success | MigrationStatus::Baseline => continue,
+            };
+
+            lines.push(format!(
+                "  {:05}  {}  {}",
+                record.version, record.file_name, detail
+            ));
+        }
+
+        lines.push(String::new());
+        lines.push("Inspect the database, then clear the row to retry:".to_string());
+        for record in &unfinished {
+            lines.push(format!(
+                "  db.getCollection(\"{collection}\").deleteOne({{ version: {} }})",
+                record.version
+            ));
+        }
+
+        bail!("{}", lines.join("\n"))
+    }
+
+    /// The highest version that ran to completion, or `None` if the database is
+    /// empty or holds only a baseline.
+    pub async fn last_applied(&self) -> Result<Option<MigrationRecord>> {
+        self.migrations
+            .find_one(doc! { "status": to_bson(&MigrationStatus::Success)? })
+            .sort(doc! { "version": -1 })
+            .await
+            .with_context(|| format!("failed to query {}", self.migrations.name()))
+    }
+
+    /// Marks the row as rolling back and restamps `startedAt`, so an abandoned
+    /// rollback reports when the rollback began rather than when the migration
+    /// was originally applied.
+    pub async fn begin_rollback(&self, version: u32) -> Result<()> {
+        self.migrations
+            .update_one(
+                doc! { "version": version },
+                doc! { "$set": {
+                    "status": to_bson(&MigrationStatus::RollingBack)?,
+                    "startedAt": DateTime::now(),
+                    "finishedAt": Bson::Null,
+                    "executionTimeMs": Bson::Null,
+                }},
+            )
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to update {version:05} in {}",
+                    self.migrations.name()
+                )
+            })?;
+
+        Ok(())
+    }
+
+    /// Changes only the status, leaving the timings from the original run.
+    pub async fn set_status(&self, version: u32, status: MigrationStatus) -> Result<()> {
+        self.migrations
+            .update_one(
+                doc! { "version": version },
+                doc! { "$set": { "status": to_bson(&status)? } },
+            )
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to update {version:05} in {}",
+                    self.migrations.name()
+                )
+            })?;
+
+        Ok(())
+    }
+
+    /// Drops the row: the migration is no longer applied, so `migrate` will
+    /// offer it again.
+    pub async fn remove(&self, version: u32) -> Result<()> {
+        self.migrations
+            .delete_one(doc! { "version": version })
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to delete {version:05} from {}",
+                    self.migrations.name()
+                )
+            })?;
+
+        Ok(())
     }
 
     pub async fn is_empty(&self) -> Result<bool> {
@@ -189,4 +312,10 @@ impl Store {
 
         Ok(found.into_iter().map(|r| (r.version, r)).collect())
     }
+}
+
+/// RFC 3339, so a timestamp in an error reads the same as one in the database.
+fn timestamp(at: DateTime) -> String {
+    at.try_to_rfc3339_string()
+        .unwrap_or_else(|_| at.to_string())
 }

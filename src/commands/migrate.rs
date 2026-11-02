@@ -38,7 +38,7 @@ impl Migrate {
     }
 
     pub async fn run(&self) -> Result<()> {
-        self.verify_nothing_unfinished().await?;
+        self.store.ensure_nothing_unfinished().await?;
 
         let migrations = migration::discover(&self.migrations_dir)?;
         if migrations.is_empty() {
@@ -51,7 +51,7 @@ impl Migrate {
 
         let baseline = self.store.baseline().await?;
         if let Some(version) = baseline {
-            println!("baseline is {version:04}, so earlier migrations are skipped");
+            println!("baseline is {version:05}, so earlier migrations are skipped");
         }
 
         let pending: Vec<&Migration> = migrations
@@ -68,6 +68,8 @@ impl Migrate {
             );
             return Ok(());
         }
+
+        self.verify_pending(&pending)?;
 
         println!(
             "applying {} migration(s) to {} ({})",
@@ -87,7 +89,7 @@ impl Migrate {
     async fn apply(&self, migration: &Migration) -> Result<()> {
         // Hashed before the run, so the record describes what actually executed.
         let checksum = migration.checksum()?;
-        println!("{:04}  {}", migration.version, migration.name);
+        println!("{:05}  {}", migration.version, migration.name);
 
         let record = MigrationRecord {
             version: migration.version,
@@ -136,50 +138,20 @@ impl Migrate {
         Ok(())
     }
 
-    /// Refuses to run while any row is `running` or `failed`. A migration that
-    /// did not finish may have changed the database, and MongoDB will not undo
-    /// it for us, so the only safe move is to stop and let a human look.
-    async fn verify_nothing_unfinished(&self) -> Result<()> {
-        let unfinished = self.store.unfinished().await?;
-        if unfinished.is_empty() {
-            return Ok(());
+    /// Refuses to apply a migration nobody has written yet. Recording the
+    /// template as applied would also record its checksum, so filling the file
+    /// in afterwards would trip the "modified after it was applied" guard.
+    fn verify_pending(&self, pending: &[&Migration]) -> Result<()> {
+        for m in pending {
+            if !migration::has_statements_in_file(&m.path)? {
+                bail!(
+                    "{} has no statements - write the migration before applying it",
+                    m.file_name
+                );
+            }
         }
 
-        let mut lines = vec![format!(
-            "{} unfinished migration(s) in {}",
-            unfinished.len(),
-            self.store.collection_name()
-        )];
-
-        for record in &unfinished {
-            let detail = match record.status {
-                // Possibly still running: killing mongor does not kill mongosh.
-                MigrationStatus::Running => format!(
-                    "started {} and never finished - it may still be running",
-                    timestamp(record.started_at)
-                ),
-                MigrationStatus::Failed => format!("failed at {}", timestamp(record.started_at)),
-                // unfinished() cannot return either of these.
-                MigrationStatus::Success | MigrationStatus::Baseline => continue,
-            };
-
-            lines.push(format!(
-                "  {:04}  {}  {}",
-                record.version, record.file_name, detail
-            ));
-        }
-
-        lines.push(String::new());
-        lines.push("Inspect the database, then clear the row to retry:".to_string());
-        for record in &unfinished {
-            lines.push(format!(
-                "  db.getCollection(\"{}\").deleteOne({{ version: {} }})",
-                self.store.collection_name(),
-                record.version
-            ));
-        }
-
-        bail!("{}", lines.join("\n"))
+        Ok(())
     }
 
     fn verify_applied(
@@ -205,10 +177,4 @@ impl Migrate {
 
         Ok(())
     }
-}
-
-/// RFC 3339, so a timestamp in an error reads the same as one in the database.
-fn timestamp(at: DateTime) -> String {
-    at.try_to_rfc3339_string()
-        .unwrap_or_else(|_| at.to_string())
 }

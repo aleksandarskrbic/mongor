@@ -25,6 +25,9 @@ pub enum Commands {
 
     /// Adopt a database that already has the schema, without running anything
     Baseline(BaselineArgs),
+
+    /// Undo the most recently applied migration
+    Rollback(RollbackArgs),
 }
 
 #[derive(Args)]
@@ -63,4 +66,11 @@ pub struct BaselineArgs {
     /// Highest version to assume applied; defaults to the newest file on disk
     #[arg(long)]
     pub version: Option<u32>,
+}
+
+#[derive(Args)]
+pub struct RollbackArgs {
+    /// Environment from mongor.toml to target
+    #[arg(long)]
+    pub env: String,
 }

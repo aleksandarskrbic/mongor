@@ -29,8 +29,6 @@ impl Baseline {
     }
 
     pub async fn run(&self) -> Result<()> {
-        // Baselining a database mongor already tracks would hide migrations it
-        // has a record of running, so it is refused rather than merged.
         if !self.store.is_empty().await? {
             bail!(
                 "{} already has migration history in {} - baseline is only for adopting a database mongor has never touched",
@@ -43,11 +41,11 @@ impl Baseline {
         self.store.set_baseline(version).await?;
 
         println!(
-            "baselined {} ({}) at {version:04}",
+            "baselined {} ({}) at {version:05}",
             self.env,
             self.store.database_name()
         );
-        println!("migrations up to {version:04} will never run against it");
+        println!("migrations up to {version:05} will never run against it");
         Ok(())
     }
 
@@ -60,7 +58,7 @@ impl Baseline {
         match migrations.last() {
             Some(m) => Ok(m.version),
             None => bail!(
-                "no migrations found in {} — pass --version to baseline anyway",
+                "no migrations found in {} - pass --version to baseline anyway",
                 self.migrations_dir.display()
             ),
         }
