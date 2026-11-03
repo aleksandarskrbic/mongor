@@ -186,5 +186,12 @@ cargo clean                    # wipe build artifacts
 
 **`mongosh: command not found`** — not on `PATH`; see Prerequisites.
 
+**`MongoDB cannot start: Linux kernel versions 6.19 and newer ...`** — MongoDB 8
+refuses to start on kernels 6.19 through 7.0.13
+([SERVER-121912](https://jira.mongodb.org/browse/SERVER-121912)). Both
+`docker-compose.yml` and CI set `GLIBC_TUNABLES=glibc.pthread.rseq=1` on the
+container, which works around it; if you start `mongo:8` by hand, pass the same
+`-e`.
+
 **Scaffolded files appear in the repo root** — you ran `cargo run -- init` from
 the repo root instead of `sandbox/`. `cargo run` uses your shell's cwd.

@@ -35,6 +35,12 @@ jobs:
     services:
       mongo:
         image: mongo:8
+        # MongoDB 8 refuses to start on Linux kernels 6.19 through 7.0.13, and
+        # hosted runners land on whichever kernel they land on. The tunable is
+        # the workaround until runners move past 7.0.14.
+        # https://jira.mongodb.org/browse/SERVER-121912
+        env:
+          GLIBC_TUNABLES: glibc.pthread.rseq=1
         ports:
           - 27017:27017
         # The runner reaches the container through the mapped port, so the tests

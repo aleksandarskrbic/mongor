@@ -10,5 +10,10 @@ services:
   mongo:
     image: mongo:8
     container_name: mongor-mongo
+    environment:
+      # MongoDB 8 refuses to start on Linux kernels 6.19 through 7.0.13. Harmless
+      # on an unaffected kernel, and the same workaround CI uses.
+      # https://jira.mongodb.org/browse/SERVER-121912
+      GLIBC_TUNABLES: glibc.pthread.rseq=1
     ports:
       - "27017:27017"
