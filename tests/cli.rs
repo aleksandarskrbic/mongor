@@ -754,3 +754,77 @@ fn migrate_to_rejects_a_target_at_or_below_the_baseline() {
         .failure()
         .stderr(predicate::str::contains("at or below the baseline 00002"));
 }
+
+#[test]
+fn migrate_dry_run_prints_the_plan_and_writes_nothing() {
+    let project = Project::new("mongor_it_dry_run");
+    three_migrations(&project);
+
+    project
+        .mongor()
+        .args(["migrate", "--env", "test", "--dry-run"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("3 migration(s) pending for test"))
+        .stdout(predicate::str::contains("00001  step_1"))
+        .stdout(predicate::str::contains("00003  step_3"))
+        .stdout(predicate::str::contains("dry run, nothing was applied"));
+
+    // Not one write, not even the collection: the early return is above the
+    // index call, which is the first thing migrate does that writes.
+    assert_eq!(
+        project.eval(r#"print(db.getCollectionNames().length)"#),
+        "0"
+    );
+
+    // It composes with --to, and the cap shows in the plan.
+    project
+        .mongor()
+        .args(["migrate", "--env", "test", "--to", "2", "--dry-run"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "2 of 3 migration(s) pending for test",
+        ))
+        .stdout(predicate::str::contains("up to 00002"))
+        .stdout(predicate::str::contains("00002  step_2"))
+        .stdout(predicate::str::contains("00003  step_3").not());
+}
+
+#[test]
+fn migrate_dry_run_conflicts_with_yes() {
+    let project = Project::new("mongor_it_dry_run_args");
+
+    // Both flags is a usage error rather than a silent precedence rule.
+    project
+        .mongor()
+        .args(["migrate", "--env", "test", "--dry-run", "--yes"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("cannot be used with"));
+}
+
+#[test]
+fn migrate_dry_run_still_enforces_the_read_only_guards() {
+    let project = Project::new("mongor_it_dry_run_guards");
+    project.write("00001_add_user.up.js", r#"db.users.insertOne({ n: 1 });"#);
+
+    project
+        .mongor()
+        .args(["migrate", "--env", "test", "--yes"])
+        .assert()
+        .success();
+
+    project.write("00001_add_user.up.js", r#"db.users.insertOne({ n: 2 });"#);
+
+    // A plan that ignored the checksum guard would promise a run that cannot
+    // happen, so the dry run refuses too.
+    project
+        .mongor()
+        .args(["migrate", "--env", "test", "--dry-run"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "was modified after it was applied",
+        ));
+}

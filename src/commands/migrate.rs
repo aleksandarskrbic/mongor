@@ -18,16 +18,18 @@ pub struct Migrate {
     migrations_dir: PathBuf,
     to: Option<u32>,
     yes: bool,
+    dry_run: bool,
 }
 
 impl Migrate {
-    pub async fn new(env: String, to: Option<u32>, yes: bool) -> Result<Self> {
+    pub async fn new(env: String, to: Option<u32>, yes: bool, dry_run: bool) -> Result<Self> {
         let cfg = config::load()?;
         let environment = cfg.environment(&env)?;
         let uri = config::resolve_uri(environment)?;
 
         // Unlike `status`, a missing mongosh is fatal, so resolve it before
-        // opening a connection we would only throw away.
+        // opening a connection we would only throw away. A dry run resolves it
+        // too: a plan that ignores a precondition of the run is not a plan.
         let mongosh = Mongosh::resolve().await?;
         let store = Store::connect(&uri, &environment.database, &cfg.migrations.collection).await?;
 
@@ -39,6 +41,7 @@ impl Migrate {
             migrations_dir: cfg.migrations.path,
             to,
             yes,
+            dry_run,
         })
     }
 
@@ -101,6 +104,14 @@ impl Migrate {
             ),
         }
 
+        // Every guard above only reads, so a dry run runs all of them and stops
+        // here, one line short of the first write.
+        if self.dry_run {
+            print_pending(&pending);
+            println!("dry run, nothing was applied - re-run without --dry-run to apply");
+            return Ok(());
+        }
+
         // Created here rather than in `Store::connect`: a read-only command
         // must not create the collection, and a run with nothing pending must
         // not either.
@@ -110,11 +121,7 @@ impl Migrate {
         // migration as it runs, so printing them twice is noise. The count above
         // is what an interrupted unattended run still needs.
         if !self.yes {
-            println!();
-            for m in &pending {
-                println!("  {:05}  {}", m.version, m.name);
-            }
-            println!();
+            print_pending(&pending);
 
             confirm(&format!(
                 "Do you want to apply these {} migration(s)?",
@@ -278,4 +285,14 @@ impl Migrate {
 
         Ok(())
     }
+}
+
+/// The plan, surrounded by blank lines. A dry run and the confirmation prompt
+/// print the same block, so there is one definition of what a plan looks like.
+fn print_pending(pending: &[&Migration]) {
+    println!();
+    for m in pending {
+        println!("  {:05}  {}", m.version, m.name);
+    }
+    println!();
 }

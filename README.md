@@ -96,7 +96,7 @@ export MONGO_PROD_URI="mongodb://..."
 | `mongor init` | Create `mongor.toml` and `migrations/` | yes |
 | `mongor new <name>` | Create the next `.up.js` and its `.down.js` | yes |
 | `mongor status` | Compare local files against applied history | yes |
-| `mongor migrate` | Apply pending migrations (`--to` to cap, `--yes` to skip the prompt) | yes |
+| `mongor migrate` | Apply pending migrations (`--to`, `--dry-run`, `--yes`) | yes |
 | `mongor rollback` | Run the matching `.down.js` for the latest migration (`--yes` to skip the prompt) | yes |
 | `mongor baseline` | Adopt a database that already has the schema | yes |
 | `mongor resolve <version>` | Clear or accept the row left by a failed migration | yes |
@@ -116,6 +116,18 @@ mongor migrate --env prod --to 42 --yes   # stops after 00042, for a staged roll
 `--to` is a one-shot target, not a desired state: it must name a migration that
 is actually pending, so a capped run can never exit 0 having applied nothing. A
 typo like `--to 1000` is refused rather than quietly applying everything.
+
+`--dry-run` prints the plan and stops before the first write — not even the
+history collection is created — so it is safe to run against production as a
+pre-flight check. It still enforces every read-only guard, so a plan is never
+printed for a run that would be refused:
+
+```sh
+mongor migrate --env prod --dry-run
+```
+
+It needs `mongosh` on `PATH` like a real run does, because a plan that ignores a
+precondition of the run is not a plan.
 
 When a migration fails or its process is lost, the row it left behind blocks
 `migrate` and `rollback` until a human looks at the database. `mongor resolve`

@@ -66,6 +66,10 @@ pub struct MigrateArgs {
     /// Apply without asking for confirmation
     #[arg(long)]
     pub yes: bool,
+
+    /// Print the plan and exit without applying anything
+    #[arg(long, conflicts_with = "yes")]
+    pub dry_run: bool,
 }
 
 #[derive(Args)]
