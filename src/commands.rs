@@ -1,7 +1,7 @@
 mod baseline;
 mod completions;
 mod init;
-pub mod migrate;
+mod migrate;
 mod new;
 mod resolve;
 mod rollback;

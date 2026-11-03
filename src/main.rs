@@ -14,10 +14,6 @@ use crate::commands::{
     Baseline, Completions, Init, Migrate, NewMigration, Resolve, Rollback, Status, Validate,
 };
 
-// cargo run -- init --migrations-dir migrations
-// cargo run -- new migration_name
-// cargo run -- status
-// cargo run -- --help
 #[tokio::main]
 async fn main() -> Result<()> {
     match Cli::parse().command {
