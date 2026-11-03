@@ -22,7 +22,7 @@ async fn main() -> Result<()> {
         Commands::Init(args) => Init::new(args.migrations_dir).run(),
         Commands::New(args) => NewMigration::new(args.name)?.run(),
         Commands::Status(args) => Status::new(args.env).await?.run().await,
-        Commands::Migrate(args) => Migrate::new(args.env, args.yes).await?.run().await,
+        Commands::Migrate(args) => Migrate::new(args.env, args.to, args.yes).await?.run().await,
         Commands::Baseline(args) => Baseline::new(args.env, args.version).await?.run().await,
         Commands::Rollback(args) => Rollback::new(args.env, args.yes).await?.run().await,
         Commands::Resolve(args) => {

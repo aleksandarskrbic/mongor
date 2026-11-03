@@ -653,3 +653,104 @@ fn resolve_refuses_to_run_without_confirmation() {
 
     assert_eq!(project.recorded_status(1).as_deref(), Some("failed"));
 }
+
+/// Three pending migrations, each writing one identifiable document.
+fn three_migrations(project: &Project) {
+    for n in 1..=3 {
+        project.write(
+            &format!("0000{n}_step_{n}.up.js"),
+            &format!("db.users.insertOne({{ n: {n} }});"),
+        );
+    }
+}
+
+#[test]
+fn migrate_to_applies_up_to_the_target_only() {
+    let project = Project::new("mongor_it_to");
+    three_migrations(&project);
+
+    project
+        .mongor()
+        .args(["migrate", "--env", "test", "--to", "2", "--yes"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "2 of 3 migration(s) pending for test",
+        ))
+        .stdout(predicate::str::contains("up to 00002"))
+        .stdout(predicate::str::contains("applied 2 migration(s)"))
+        .stdout(predicate::str::contains(
+            "1 migration(s) still pending - raise --to to continue",
+        ));
+
+    assert_eq!(project.eval("print(db.users.countDocuments())"), "2");
+    assert_eq!(project.recorded_status(3), None);
+
+    // Raising the cap continues from where it stopped.
+    project
+        .mongor()
+        .args(["migrate", "--env", "test", "--to", "3", "--yes"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("applied 1 migration(s)"));
+
+    assert_eq!(project.eval("print(db.users.countDocuments())"), "3");
+}
+
+#[test]
+fn migrate_to_rejects_targets_that_would_do_nothing() {
+    let project = Project::new("mongor_it_to_rejects");
+    three_migrations(&project);
+
+    // No such migration: the failure mode is a typo silently applying all of them.
+    project
+        .mongor()
+        .args(["migrate", "--env", "test", "--to", "99", "--yes"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--to 00099 matches no migration"));
+
+    project
+        .mongor()
+        .args(["migrate", "--env", "test", "--to", "2", "--yes"])
+        .assert()
+        .success();
+
+    // Already applied.
+    project
+        .mongor()
+        .args(["migrate", "--env", "test", "--to", "2", "--yes"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--to 00002 is already applied"));
+
+    // Nothing was applied by either refusal.
+    assert_eq!(project.eval("print(db.users.countDocuments())"), "2");
+
+    // Not a number at all.
+    project
+        .mongor()
+        .args(["migrate", "--env", "test", "--to", "abc"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("invalid value 'abc'"));
+}
+
+#[test]
+fn migrate_to_rejects_a_target_at_or_below_the_baseline() {
+    let project = Project::new("mongor_it_to_baseline");
+    three_migrations(&project);
+
+    project
+        .mongor()
+        .args(["baseline", "--env", "test", "--version", "2"])
+        .assert()
+        .success();
+
+    project
+        .mongor()
+        .args(["migrate", "--env", "test", "--to", "1", "--yes"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("at or below the baseline 00002"));
+}

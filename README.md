@@ -96,7 +96,7 @@ export MONGO_PROD_URI="mongodb://..."
 | `mongor init` | Create `mongor.toml` and `migrations/` | yes |
 | `mongor new <name>` | Create the next `.up.js` and its `.down.js` | yes |
 | `mongor status` | Compare local files against applied history | yes |
-| `mongor migrate` | Apply pending migrations (`--yes` to skip the prompt) | yes |
+| `mongor migrate` | Apply pending migrations (`--to` to cap, `--yes` to skip the prompt) | yes |
 | `mongor rollback` | Run the matching `.down.js` for the latest migration (`--yes` to skip the prompt) | yes |
 | `mongor baseline` | Adopt a database that already has the schema | yes |
 | `mongor resolve <version>` | Clear or accept the row left by a failed migration | yes |
@@ -110,7 +110,12 @@ unattended:
 mongor migrate --env prod             # prints the plan, waits for `yes`
 mongor migrate --env prod --yes       # applies straight away, for CI
 mongor rollback --env prod --yes
+mongor migrate --env prod --to 42 --yes   # stops after 00042, for a staged rollout
 ```
+
+`--to` is a one-shot target, not a desired state: it must name a migration that
+is actually pending, so a capped run can never exit 0 having applied nothing. A
+typo like `--to 1000` is refused rather than quietly applying everything.
 
 When a migration fails or its process is lost, the row it left behind blocks
 `migrate` and `rollback` until a human looks at the database. `mongor resolve`

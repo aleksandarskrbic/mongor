@@ -16,11 +16,12 @@ pub struct Migrate {
     store: Store,
     mongosh: Mongosh,
     migrations_dir: PathBuf,
+    to: Option<u32>,
     yes: bool,
 }
 
 impl Migrate {
-    pub async fn new(env: String, yes: bool) -> Result<Self> {
+    pub async fn new(env: String, to: Option<u32>, yes: bool) -> Result<Self> {
         let cfg = config::load()?;
         let environment = cfg.environment(&env)?;
         let uri = config::resolve_uri(environment)?;
@@ -36,6 +37,7 @@ impl Migrate {
             store,
             mongosh,
             migrations_dir: cfg.migrations.path,
+            to,
             yes,
         })
     }
@@ -53,11 +55,13 @@ impl Migrate {
         self.verify_applied(&migrations, &applied)?;
 
         let baseline = self.store.baseline().await?;
+        self.verify_target(&migrations, &applied, baseline)?;
+
         if let Some(version) = baseline {
             println!("baseline is {version:05}, so earlier migrations are skipped");
         }
 
-        let pending: Vec<&Migration> = migrations
+        let mut pending: Vec<&Migration> = migrations
             .iter()
             .filter(|m| !applied.contains_key(&m.version))
             .filter(|m| baseline.is_none_or(|version| m.version > version))
@@ -72,23 +76,39 @@ impl Migrate {
             return Ok(());
         }
 
+        // Capped after the emptiness check: "nothing to migrate" is a fact about
+        // the database, not about this run's ceiling.
+        let total = pending.len();
+        if let Some(target) = self.to {
+            pending.retain(|m| m.version <= target);
+        }
+
         self.verify_pending(&pending)?;
 
-        println!(
-            "{} migration(s) pending for {} ({})",
-            pending.len(),
-            self.env,
-            self.store.database_name()
-        );
+        // The count carries the cap because --yes suppresses the list below: in
+        // a CI log this line is the only evidence the run was capped.
+        match self.to {
+            Some(target) => println!(
+                "{} of {total} migration(s) pending for {} ({}), up to {target:05}",
+                pending.len(),
+                self.env,
+                self.store.database_name()
+            ),
+            None => println!(
+                "{total} migration(s) pending for {} ({})",
+                self.env,
+                self.store.database_name()
+            ),
+        }
 
-        // Listed only when we are about to ask: the apply loop below names each
-        // migration as it runs, so printing them twice is noise. The count above
-        // is what an interrupted unattended run still needs.
         // Created here rather than in `Store::connect`: a read-only command
         // must not create the collection, and a run with nothing pending must
         // not either.
         self.store.ensure_version_index().await?;
 
+        // Listed only when we are about to ask: the apply loop below names each
+        // migration as it runs, so printing them twice is noise. The count above
+        // is what an interrupted unattended run still needs.
         if !self.yes {
             println!();
             for m in &pending {
@@ -108,6 +128,12 @@ impl Migrate {
         }
 
         println!("applied {} migration(s)", pending.len());
+
+        let withheld = total - pending.len();
+        if withheld > 0 {
+            println!("{withheld} migration(s) still pending - raise --to to continue");
+        }
+
         Ok(())
     }
 
@@ -160,6 +186,56 @@ impl Migrate {
         })?;
 
         println!("  ok in {elapsed} ms");
+        Ok(())
+    }
+
+    /// Refuses every `--to` that names nothing to do. A cap that selected no
+    /// migration would print an ordinary plan and exit 0, which is
+    /// indistinguishable from a staged rollout that worked.
+    fn verify_target(
+        &self,
+        migrations: &[Migration],
+        applied: &BTreeMap<u32, MigrationRecord>,
+        baseline: Option<u32>,
+    ) -> Result<()> {
+        let Some(target) = self.to else {
+            return Ok(());
+        };
+
+        if !migrations.iter().any(|m| m.version == target) {
+            bail!(
+                "--to {target:05} matches no migration in {} - run `mongor status --env {}` to see which versions exist",
+                self.migrations_dir.display(),
+                self.env
+            );
+        }
+
+        if let Some(version) = baseline
+            && target <= version
+        {
+            bail!(
+                "--to {target:05} is at or below the baseline {version:05} - migrations up to the baseline never run"
+            );
+        }
+
+        if applied.contains_key(&target) {
+            bail!(
+                "--to {target:05} is already applied to {} - raise --to, or drop it to apply everything pending",
+                self.env
+            );
+        }
+
+        // Not the same as the check above: the target is pending, but the
+        // database is already past it, so the state it asks for cannot be built.
+        if let Some(latest) = applied.keys().next_back().copied()
+            && target < latest
+        {
+            bail!(
+                "--to {target:05} is behind {}, which is already at {latest:05} - roll back first, or raise --to",
+                self.env
+            );
+        }
+
         Ok(())
     }
 

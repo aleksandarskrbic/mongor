@@ -20,7 +20,7 @@ pub enum Commands {
     /// Show applied and pending migrations
     Status(StatusArgs),
 
-    /// Apply all pending migrations
+    /// Apply pending migrations, optionally up to a version
     Migrate(MigrateArgs),
 
     /// Adopt a database that already has the schema, without running anything
@@ -58,6 +58,10 @@ pub struct MigrateArgs {
     /// Environment from mongor.toml to target
     #[arg(long)]
     pub env: String,
+
+    /// Highest version to apply; must name a migration that exists
+    #[arg(long, value_name = "VERSION")]
+    pub to: Option<u32>,
 
     /// Apply without asking for confirmation
     #[arg(long)]
