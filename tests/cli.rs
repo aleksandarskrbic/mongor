@@ -970,3 +970,42 @@ fn validate_requires_exactly_one_target() {
         .failure()
         .stderr(predicate::str::contains("cannot be used with"));
 }
+
+#[test]
+fn completions_generates_a_script_for_each_shell() {
+    let project = Project::new("mongor_it_completions");
+
+    for shell in ["bash", "zsh", "fish", "powershell", "elvish"] {
+        let output = project
+            .mongor()
+            .args(["completions", shell])
+            .assert()
+            .success()
+            // Generated from the parser, so every command appears without the
+            // completions code knowing any of their names.
+            .stdout(predicate::str::contains("validate"))
+            .stdout(predicate::str::contains("dry-run"))
+            .get_output()
+            .stdout
+            .clone();
+
+        // The script completes `mongor`, not the path cargo invoked.
+        let script = String::from_utf8(output).unwrap();
+        assert!(script.contains("mongor"), "{shell} script names the binary");
+        assert!(!script.contains("target/debug"), "{shell} leaks the path");
+    }
+}
+
+#[test]
+fn completions_rejects_an_unknown_shell() {
+    let project = Project::new("mongor_it_completions_args");
+
+    project
+        .mongor()
+        .args(["completions", "tcsh"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("invalid value 'tcsh'"))
+        // The accepted list comes from clap_complete, not from us.
+        .stderr(predicate::str::contains("zsh"));
+}

@@ -1,4 +1,5 @@
 mod baseline;
+mod completions;
 mod init;
 pub mod migrate;
 mod new;
@@ -8,6 +9,7 @@ mod status;
 mod validate;
 
 pub use baseline::Baseline;
+pub use completions::Completions;
 pub use init::Init;
 pub use migrate::Migrate;
 pub use new::NewMigration;

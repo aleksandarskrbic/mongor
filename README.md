@@ -4,7 +4,7 @@
 
 A standalone MongoDB migration CLI, written in Rust and inspired by Flyway and Goose.
 
-> **Status: early development.** All six commands work and are covered by tests
+> **Status: early development.** All nine commands work and are covered by tests
 > that run against a real database. Not yet published to crates.io, no prebuilt
 > binaries, and no distributed lock — concurrent runs cannot apply the same
 > migration twice, but a whole run is not serialised. Try it on something you can
@@ -101,6 +101,7 @@ export MONGO_PROD_URI="mongodb://..."
 | `mongor baseline` | Adopt a database that already has the schema | yes |
 | `mongor resolve <version>` | Clear or accept the row left by a failed migration | yes |
 | `mongor validate` | Check migrations against history, changing nothing | yes |
+| `mongor completions <shell>` | Print a shell completion script | yes |
 
 `mongor migrate` and `mongor rollback` print what they are about to do and then
 ask you to type `yes`, the way `terraform apply` does. In a pipeline, where
@@ -174,6 +175,18 @@ It diverges from `migrate` in two places, deliberately. A missing file for an
 applied row is an error here although `migrate` never looks for one — history
 that describes unreadable code is worth failing on. And an empty migration at or
 below the baseline is ignored, because `migrate` would never run it.
+
+## Shell completions
+
+The script is generated from the parser itself, so it always matches the flags
+the binary actually has:
+
+```sh
+mongor completions zsh  > ~/.zfunc/_mongor        # then: autoload -U compinit && compinit
+mongor completions bash > /usr/local/etc/bash_completion.d/mongor
+```
+
+`bash`, `zsh`, `fish`, `powershell` and `elvish` are supported.
 
 ## Design notes
 

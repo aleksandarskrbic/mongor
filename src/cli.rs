@@ -1,4 +1,5 @@
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, CommandFactory, Parser, Subcommand};
+use clap_complete::Shell;
 use std::path::PathBuf;
 
 // `about` pulls the description from Cargo.toml, so --help and crates.io agree.
@@ -34,6 +35,16 @@ pub enum Commands {
 
     /// Check migrations against recorded history without changing anything
     Validate(ValidateArgs),
+
+    /// Print a shell completion script to stdout
+    Completions(CompletionsArgs),
+}
+
+/// The parser as a builder `Command`, which is what generates the completion
+/// script. Here rather than in the command, so clap's builder API stays in the
+/// one file that owns clap.
+pub fn command() -> clap::Command {
+    Cli::command()
 }
 
 #[derive(Args)]
@@ -149,4 +160,10 @@ pub struct ValidateTarget {
     /// Check only the files, without connecting to a database
     #[arg(long)]
     pub offline: bool,
+}
+
+#[derive(Args)]
+pub struct CompletionsArgs {
+    /// Shell to generate the script for
+    pub shell: Shell,
 }
