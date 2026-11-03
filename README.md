@@ -100,6 +100,7 @@ export MONGO_PROD_URI="mongodb://..."
 | `mongor rollback` | Run the matching `.down.js` for the latest migration (`--yes` to skip the prompt) | yes |
 | `mongor baseline` | Adopt a database that already has the schema | yes |
 | `mongor resolve <version>` | Clear or accept the row left by a failed migration | yes |
+| `mongor validate` | Check migrations against history, changing nothing | yes |
 
 `mongor migrate` and `mongor rollback` print what they are about to do and then
 ask you to type `yes`, the way `terraform apply` does. In a pipeline, where
@@ -142,6 +143,37 @@ mongor resolve 3 --env prod --applied    # you finished the work by hand
 already changed, and `--applied` does not run anything — both only edit mongor's
 own record of what happened. It refuses rows that are not unfinished: an applied
 migration is history, and `rollback` is the command for undoing one.
+
+`mongor validate` is the check to run on a pull request. It writes nothing,
+reports every problem rather than stopping at the first, and exits non-zero if
+any of them is an error:
+
+```sh
+mongor validate --env staging   # files and recorded history
+mongor validate --offline       # files only, no database and no mongosh
+```
+
+`--offline` exists because a pull request from a fork has no credentials. It is
+the one command whose `--env` is optional — but not absent-means-offline, so a
+bare `mongor validate` is a usage error rather than a silent guess.
+
+Output is one line per problem, severity first, so it greps:
+
+```
+error  checksum         00002_backfill.up.js   modified after it was applied - recorded sha256:…, on disk sha256:…
+warn   no-rollback      00003_drop_field.up.js 00003_drop_field.down.js has no statements - this migration cannot be undone
+```
+
+Errors are the things `migrate` would refuse: a modified applied migration, an
+applied row whose file is gone, an unfinished row, an empty migration, a
+mis-named script, a baseline above every file. Warnings are things worth knowing
+before a deploy rather than during an incident: a missing rollback, a version
+gap, an orphaned `.down.js`, a migration merged in below the high-water mark.
+
+It diverges from `migrate` in two places, deliberately. A missing file for an
+applied row is an error here although `migrate` never looks for one — history
+that describes unreadable code is worth failing on. And an empty migration at or
+below the baseline is ignored, because `migrate` would never run it.
 
 ## Design notes
 

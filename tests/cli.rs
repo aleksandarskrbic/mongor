@@ -828,3 +828,145 @@ fn migrate_dry_run_still_enforces_the_read_only_guards() {
             "was modified after it was applied",
         ));
 }
+
+#[test]
+fn validate_passes_a_clean_migration_set() {
+    let project = Project::new("mongor_it_validate_clean");
+    project.write("00001_add_user.up.js", r#"db.users.insertOne({ n: 1 });"#);
+    project.write(
+        "00001_add_user.down.js",
+        r#"db.users.deleteMany({ n: 1 });"#,
+    );
+
+    project
+        .mongor()
+        .args(["validate", "--env", "test"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("no problems found in 1 migration"));
+
+    // Same verdict without a database, which is what a pull request has.
+    project
+        .mongor()
+        .args(["validate", "--offline"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("not checked (--offline)"))
+        .stdout(predicate::str::contains("no problems found"));
+}
+
+#[test]
+fn validate_reports_every_error_not_just_the_first() {
+    let project = Project::new("mongor_it_validate_errors");
+    project.write("00001_add_user.up.js", r#"db.users.insertOne({ n: 1 });"#);
+    project.write("00002_add_order.up.js", r#"db.orders.insertOne({ n: 2 });"#);
+
+    project
+        .mongor()
+        .args(["migrate", "--env", "test", "--yes"])
+        .assert()
+        .success();
+
+    // Two independent problems at once: migrate would stop at the first.
+    project.write("00001_add_user.up.js", r#"db.users.insertOne({ n: 99 });"#);
+    project.write(
+        "00002_add_order.up.js",
+        r#"db.orders.insertOne({ n: 98 });"#,
+    );
+
+    project
+        .mongor()
+        .args(["validate", "--env", "test"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("error  checksum").count(2))
+        .stdout(predicate::str::contains("00001_add_user.up.js"))
+        .stdout(predicate::str::contains("00002_add_order.up.js"))
+        .stderr(predicate::str::contains("2 error(s)"));
+}
+
+#[test]
+fn validate_flags_rows_with_no_file_and_names_resolve() {
+    let project = Project::new("mongor_it_validate_rows");
+    project.write("00001_add_user.up.js", r#"db.users.insertOne({ n: 1 });"#);
+
+    project
+        .mongor()
+        .args(["migrate", "--env", "test", "--yes"])
+        .assert()
+        .success();
+
+    // History describing code nobody can read.
+    std::fs::remove_file(project.path("00001_add_user.up.js")).unwrap();
+
+    // Plus an unfinished row, which must point at the command that clears it.
+    project.eval(
+        r#"db.mongor_migrations.insertOne({
+             version: 7, name: "stuck", fileName: "00007_stuck.up.js",
+             checksum: "sha256:0", status: "failed",
+             startedAt: new Date(), finishedAt: null, executionTimeMs: null,
+           });"#,
+    );
+
+    project
+        .mongor()
+        .args(["validate", "--env", "test"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("error  missing-file"))
+        .stdout(predicate::str::contains("error  unfinished"))
+        .stdout(predicate::str::contains(
+            "mongor resolve 7 --env test --retry",
+        ));
+}
+
+#[test]
+fn validate_warns_without_failing() {
+    let project = Project::new("mongor_it_validate_warns");
+    // No .down.js, and a gap at 00002.
+    project.write("00001_add_user.up.js", r#"db.users.insertOne({ n: 1 });"#);
+    project.write("00003_add_order.up.js", r#"db.orders.insertOne({ n: 3 });"#);
+    // A rollback whose migration was renamed away.
+    project.write("00009_gone.down.js", r#"db.users.drop();"#);
+    // A file that looks like a script but cannot be one.
+    project.write("00004_typo.up.js.bak", r#"db.users.drop();"#);
+
+    project
+        .mongor()
+        .args(["validate", "--offline"])
+        .assert()
+        // The mis-named file is the only error; the rest are warnings.
+        .failure()
+        .stdout(predicate::str::contains("error  file-name"))
+        .stdout(predicate::str::contains("warn   no-rollback").count(2))
+        .stdout(predicate::str::contains("warn   gap"))
+        .stdout(predicate::str::contains("warn   orphan-rollback"));
+
+    std::fs::remove_file(project.path("00004_typo.up.js.bak")).unwrap();
+
+    project
+        .mongor()
+        .args(["validate", "--offline"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("warning(s), no errors"));
+}
+
+#[test]
+fn validate_requires_exactly_one_target() {
+    let project = Project::new("mongor_it_validate_args");
+
+    project
+        .mongor()
+        .arg("validate")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("<--env <ENV>|--offline>"));
+
+    project
+        .mongor()
+        .args(["validate", "--env", "test", "--offline"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("cannot be used with"));
+}

@@ -33,16 +33,29 @@ impl Migration {
 /// hand-written `1_foo.up.js` is not silently ignored.
 const VERSION_WIDTH: usize = 5;
 
+const UP_SUFFIX: &str = ".up.js";
+const DOWN_SUFFIX: &str = ".down.js";
+
 pub fn migration_file_name(version: u32, name: &str) -> String {
-    format!("{version:0VERSION_WIDTH$}_{name}.up.js")
+    format!("{version:0VERSION_WIDTH$}_{name}{UP_SUFFIX}")
 }
 
 pub fn rollback_file_name(version: u32, name: &str) -> String {
-    format!("{version:0VERSION_WIDTH$}_{name}.down.js")
+    format!("{version:0VERSION_WIDTH$}_{name}{DOWN_SUFFIX}")
 }
 
 fn parse(file_name: &str) -> Option<(u32, &str)> {
-    let rest = file_name.strip_suffix(".up.js")?;
+    parse_suffixed(file_name, UP_SUFFIX)
+}
+
+pub fn parse_rollback(file_name: &str) -> Option<(u32, &str)> {
+    parse_suffixed(file_name, DOWN_SUFFIX)
+}
+
+// The returned name borrows from `file_name`, not from `suffix`, and with two
+// `&str` parameters the compiler cannot guess which - so say it.
+fn parse_suffixed<'a>(file_name: &'a str, suffix: &str) -> Option<(u32, &'a str)> {
+    let rest = file_name.strip_suffix(suffix)?;
     let (version, name) = rest.split_once('_')?;
 
     if version.is_empty() || name.is_empty() || !version.chars().all(|c| c.is_ascii_digit()) {
@@ -52,8 +65,18 @@ fn parse(file_name: &str) -> Option<(u32, &str)> {
     Some((version.parse().ok()?, name))
 }
 
-/// Returns every `V<version>__<name>.js` in `migrations_dir`, sorted by version.
+/// Returns every `<version>_<name>.up.js` in `migrations_dir`, sorted by version.
 pub fn discover(migrations_dir: &Path) -> Result<Vec<Migration>> {
+    discover_suffixed(migrations_dir, UP_SUFFIX, "migration")
+}
+
+/// The `.down.js` half. Only `validate` discovers rollbacks: `rollback` builds
+/// the name from the record, so it can undo a migration whose `.up.js` is gone.
+pub fn discover_rollbacks(migrations_dir: &Path) -> Result<Vec<Migration>> {
+    discover_suffixed(migrations_dir, DOWN_SUFFIX, "rollback")
+}
+
+fn discover_suffixed(migrations_dir: &Path, suffix: &str, kind: &str) -> Result<Vec<Migration>> {
     let entries = fs::read_dir(migrations_dir)
         .with_context(|| format!("failed to read {}", migrations_dir.display()))?;
 
@@ -68,7 +91,7 @@ pub fn discover(migrations_dir: &Path) -> Result<Vec<Migration>> {
             continue;
         };
 
-        let Some((version, name)) = parse(file_name) else {
+        let Some((version, name)) = parse_suffixed(file_name, suffix) else {
             continue;
         };
 
@@ -85,7 +108,7 @@ pub fn discover(migrations_dir: &Path) -> Result<Vec<Migration>> {
     for pair in migrations.windows(2) {
         if pair[0].version == pair[1].version {
             anyhow::bail!(
-                "duplicate migration version {:05}: {} and {}",
+                "duplicate {kind} version {:05}: {} and {}",
                 pair[0].version,
                 pair[0].file_name,
                 pair[1].file_name
@@ -94,6 +117,56 @@ pub fn discover(migrations_dir: &Path) -> Result<Vec<Migration>> {
     }
 
     Ok(migrations)
+}
+
+/// Names in `migrations_dir` that were plainly meant to be scripts but are not
+/// ones mongor can run.
+///
+/// `discover` skips whatever it cannot parse, so a typo is otherwise a migration
+/// that never runs and says nothing. Sorted, so the report is stable.
+pub fn suspicious_file_names(migrations_dir: &Path) -> Result<Vec<String>> {
+    let entries = fs::read_dir(migrations_dir)
+        .with_context(|| format!("failed to read {}", migrations_dir.display()))?;
+
+    let mut names = Vec::new();
+
+    for entry in entries {
+        let entry =
+            entry.with_context(|| format!("failed to read {}", migrations_dir.display()))?;
+
+        let os_name = entry.file_name();
+        // A name that is not UTF-8 cannot be a migration, and we could not print
+        // it back either.
+        let Some(file_name) = os_name.to_str() else {
+            continue;
+        };
+
+        if parse(file_name).is_none()
+            && parse_rollback(file_name).is_none()
+            && looks_like_a_script(file_name)
+        {
+            names.push(file_name.to_string());
+        }
+    }
+
+    names.sort();
+    Ok(names)
+}
+
+/// Whether a name that failed to parse still looks like an attempt at one of our
+/// scripts: a suffix that is there but mis-cased or followed by something else,
+/// or a `.js` file numbered like a migration but with no direction.
+fn looks_like_a_script(file_name: &str) -> bool {
+    let lower = file_name.to_ascii_lowercase();
+
+    if lower.contains(UP_SUFFIX) || lower.contains(DOWN_SUFFIX) {
+        return true;
+    }
+
+    lower.ends_with(".js")
+        && lower.split_once('_').is_some_and(|(version, _)| {
+            !version.is_empty() && version.chars().all(|c| c.is_ascii_digit())
+        })
 }
 
 pub fn next_version(migrations_dir: &Path) -> Result<u32> {
@@ -215,6 +288,44 @@ mod tests {
                 Some((version, name)),
                 "parsing {file_name}"
             );
+        }
+    }
+
+    #[test]
+    fn parses_well_formed_rollback_names() {
+        assert_eq!(
+            parse_rollback("00001_create_email_index.down.js"),
+            Some((1, "create_email_index"))
+        );
+        assert_eq!(parse_rollback("00001_create_email_index.up.js"), None);
+    }
+
+    #[test]
+    fn flags_names_that_only_look_like_scripts() {
+        let cases = [
+            "00001_x.up.js.bak",
+            "00001_X.UP.JS",
+            "_no_version.up.js",
+            "abc_not_a_number.up.js",
+            "00002_no_direction.js",
+            "00001_x.down.js.orig",
+        ];
+
+        for file_name in cases {
+            assert!(looks_like_a_script(file_name), "should flag {file_name}");
+        }
+    }
+
+    #[test]
+    fn ignores_files_that_were_never_meant_to_be_scripts() {
+        for file_name in [
+            "README.md",
+            ".gitkeep",
+            "helpers.js",
+            "lib_utils.js",
+            "notes.txt",
+        ] {
+            assert!(!looks_like_a_script(file_name), "should ignore {file_name}");
         }
     }
 

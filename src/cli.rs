@@ -31,6 +31,9 @@ pub enum Commands {
 
     /// Repair the row left by a failed or interrupted migration
     Resolve(ResolveArgs),
+
+    /// Check migrations against recorded history without changing anything
+    Validate(ValidateArgs),
 }
 
 #[derive(Args)]
@@ -125,4 +128,25 @@ pub struct ResolveAction {
     /// Record the migration as applied without running it
     #[arg(long)]
     pub applied: bool,
+}
+
+#[derive(Args)]
+pub struct ValidateArgs {
+    #[command(flatten)]
+    pub target: ValidateTarget,
+}
+
+// Exactly one of the two. Absence cannot mean offline: a future `default_env`
+// would make a bare `mongor validate` resolve an environment and quietly change
+// what a CI job checks.
+#[derive(Args)]
+#[group(required = true, multiple = false)]
+pub struct ValidateTarget {
+    /// Environment from mongor.toml to target
+    #[arg(long)]
+    pub env: Option<String>,
+
+    /// Check only the files, without connecting to a database
+    #[arg(long)]
+    pub offline: bool,
 }

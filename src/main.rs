@@ -10,7 +10,7 @@ use anyhow::Result;
 use clap::Parser;
 
 use crate::cli::{Cli, Commands};
-use crate::commands::{Baseline, Init, Migrate, NewMigration, Resolve, Rollback, Status};
+use crate::commands::{Baseline, Init, Migrate, NewMigration, Resolve, Rollback, Status, Validate};
 
 // cargo run -- init --migrations-dir migrations
 // cargo run -- new migration_name
@@ -41,6 +41,12 @@ async fn main() -> Result<()> {
             .await?
             .run()
             .await
+        }
+        Commands::Validate(args) => {
+            Validate::new(args.target.env, args.target.offline)
+                .await?
+                .run()
+                .await
         }
     }
 }
