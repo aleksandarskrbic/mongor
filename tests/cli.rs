@@ -462,35 +462,78 @@ fn migrate_creates_the_unique_version_index() {
 }
 
 #[test]
-fn migrate_refuses_a_version_that_already_has_a_row() {
-    let project = Project::new("mongor_it_duplicate");
+fn a_row_mongor_cannot_read_is_reported_and_repairable() {
+    let project = Project::new("mongor_it_unknown_status");
     project.write("00001_add_user.up.js", r#"db.users.insertOne({ n: 1 });"#);
 
-    // A status mongor does not know is invisible to both `applied` and
-    // `unfinished`, so 00001 looks pending and the insert is what catches it.
-    // Deterministic, unlike racing two real runs.
+    // The slip an operator makes repairing the collection by hand: a status
+    // outside the five mongor knows. It is invisible to `applied` and
+    // `unfinished`, so without a dedicated reader it looks pending for ever.
     project.eval(
         r#"db.mongor_migrations.insertOne({
              version: 1,
              name: "add_user",
              fileName: "00001_add_user.up.js",
              checksum: "sha256:0",
-             status: "somethingelse",
+             status: "Success",
              startedAt: new Date(),
              finishedAt: null,
              executionTimeMs: null,
            });"#,
     );
 
+    // Every command that could act on it says so, and names the way out.
+    for command in ["migrate", "rollback"] {
+        project
+            .mongor()
+            .args([command, "--env", "test", "--yes"])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("status mongor does not know"))
+            .stderr(predicate::str::contains(
+                "mongor resolve 1 --env test --retry",
+            ));
+    }
+
+    project
+        .mongor()
+        .args(["validate", "--env", "test"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("error  unknown-status"));
+
+    project
+        .mongor()
+        .args(["status", "--env", "test"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("! 00001"))
+        .stdout(predicate::str::contains("unknown"));
+
+    // --applied would be asserting something about a row nobody can interpret.
+    project
+        .mongor()
+        .args(["resolve", "1", "--env", "test", "--applied", "--yes"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("only --retry can clear it"));
+
+    project
+        .mongor()
+        .args(["resolve", "1", "--env", "test", "--retry", "--yes"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("is cleared"));
+
+    // Recovered: nothing ran while the row was there, and migrate works now.
     project
         .mongor()
         .args(["migrate", "--env", "test", "--yes"])
         .assert()
-        .failure()
-        .stderr(predicate::str::contains("already has a row for 00001"));
+        .success()
+        .stdout(predicate::str::contains("applied 1 migration(s)"));
 
-    // Refused before the script ran.
-    assert_eq!(project.eval("print(db.users.countDocuments())"), "0");
+    assert_eq!(project.eval("print(db.users.countDocuments())"), "1");
 }
 
 #[test]

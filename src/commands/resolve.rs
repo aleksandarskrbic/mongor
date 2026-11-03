@@ -57,6 +57,13 @@ impl Resolve {
     }
 
     pub async fn run(&self) -> Result<()> {
+        // Checked before the typed read, which cannot deserialize such a row.
+        // `resolve` is the command every other refusal points at, so it has to
+        // be able to clear the row those refusals are about.
+        if let Some(status) = self.unknown_status().await? {
+            return self.clear_unknown(&status).await;
+        }
+
         let Some(record) = self.store.record(self.version).await? else {
             bail!(
                 "no row for {:05} in {} - nothing to resolve",
@@ -118,6 +125,63 @@ impl Resolve {
             ),
         }
 
+        Ok(())
+    }
+
+    /// The stored status of this version when mongor does not recognise it.
+    async fn unknown_status(&self) -> Result<Option<String>> {
+        Ok(self
+            .store
+            .unknown_rows()
+            .await?
+            .into_iter()
+            .find(|(version, _)| *version == self.version)
+            .map(|(_, status)| status))
+    }
+
+    /// Drops a row mongor cannot read. Only `--retry` can do this: `--applied`
+    /// would be asserting something about a row nobody can interpret.
+    async fn clear_unknown(&self, status: &str) -> Result<()> {
+        if !matches!(self.action, Action::Retry) {
+            bail!(
+                "{:05} has status `{status}`, which mongor does not know - only --retry can clear it",
+                self.version
+            );
+        }
+
+        println!(
+            "1 row to clear in {} ({})",
+            self.env,
+            self.store.database_name()
+        );
+        println!();
+        println!(
+            "  {:05}  status `{status}` is not one mongor wrote",
+            self.version
+        );
+        println!();
+        println!("  {}", self.caveat());
+
+        if !self.yes {
+            println!();
+            confirm(&format!(
+                "Do you want to clear the row for {:05}?",
+                self.version
+            ))?;
+        }
+
+        println!();
+        if !self.store.remove_any(self.version).await? {
+            bail!(
+                "{:05} has no row any more - it changed while this command was running",
+                self.version
+            );
+        }
+
+        println!(
+            "  {:05} is cleared - migrate will offer the migration again",
+            self.version
+        );
         Ok(())
     }
 

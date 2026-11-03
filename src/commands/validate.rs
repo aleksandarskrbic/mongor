@@ -72,6 +72,7 @@ impl Validate {
 
         if let Some(store) = &self.store {
             self.check_unfinished(store, &mut errors).await?;
+            self.check_unknown(store, &mut errors).await?;
         }
 
         self.check_rollbacks(&migrations, &mut warnings)?;
@@ -234,6 +235,23 @@ impl Validate {
                 &format!(
                     "{detail} - run `mongor resolve {} --env {} --retry`",
                     record.version,
+                    self.env.as_deref().unwrap_or("<env>")
+                ),
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// A row mongor cannot read is invisible to every other check, so without
+    /// this validate calls a database clean that `migrate` refuses outright.
+    async fn check_unknown(&self, store: &Store, errors: &mut Vec<String>) -> Result<()> {
+        for (version, status) in store.unknown_rows().await? {
+            errors.push(problem(
+                "unknown-status",
+                &format!("{version:05}"),
+                &format!(
+                    "has status `{status}`, which mongor does not know - run `mongor resolve {version} --env {} --retry`",
                     self.env.as_deref().unwrap_or("<env>")
                 ),
             ));

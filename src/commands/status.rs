@@ -54,6 +54,7 @@ impl Status {
 
         let applied = self.store.applied().await?;
         let baseline = self.store.baseline().await?;
+        let unknown: BTreeMap<u32, String> = self.store.unknown_rows().await?.into_iter().collect();
 
         let unfinished: BTreeMap<u32, MigrationStatus> = self
             .store
@@ -76,6 +77,8 @@ impl Status {
                 } else {
                     ("modified", true)
                 }
+            } else if unknown.contains_key(&m.version) {
+                ("unknown", true)
             } else if let Some(status) = unfinished.get(&m.version) {
                 match status {
                     MigrationStatus::Running => ("running", true),

@@ -224,6 +224,59 @@ impl Store {
     /// Refuses to go on while any row is unfinished. A script that did not
     /// finish may have changed the database, and MongoDB will not undo it for
     /// us, so the only safe move is to stop and let a human look.
+    /// Versions whose status is none of the five mongor knows, with the string
+    /// as stored.
+    ///
+    /// Read as plain documents, because the whole point is that they do not
+    /// deserialize. Without this they are invisible: `applied` and `unfinished`
+    /// both filter on known values, so such a row looks pending while the
+    /// unique index refuses to let anything write over it.
+    pub async fn unknown_rows(&self) -> Result<Vec<(u32, String)>> {
+        let cursor = self
+            .migrations
+            .clone_with_type::<Document>()
+            .find(doc! { "status": { "$nin": [
+                to_bson(&MigrationStatus::Running)?,
+                to_bson(&MigrationStatus::Success)?,
+                to_bson(&MigrationStatus::Failed)?,
+                to_bson(&MigrationStatus::RollingBack)?,
+                to_bson(&MigrationStatus::Baseline)?,
+            ] } })
+            .sort(doc! { "version": 1 })
+            .await
+            .with_context(|| format!("failed to query {}", self.migrations.name()))?;
+
+        let found: Vec<Document> = cursor
+            .try_collect()
+            .await
+            .with_context(|| format!("failed to read {}", self.migrations.name()))?;
+
+        Ok(found
+            .iter()
+            .filter_map(|row| {
+                let version = row.get_i32("version").map(|v| v as u32).ok()?;
+                let status = row.get_str("status").unwrap_or("(not a string)");
+                Some((version, status.to_string()))
+            })
+            .collect())
+    }
+
+    /// Drops a row whatever its status, for repairing one mongor cannot read.
+    pub async fn remove_any(&self, version: u32) -> Result<bool> {
+        let result = self
+            .migrations
+            .delete_one(doc! { "version": version })
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to delete {version:05} from {}",
+                    self.migrations.name()
+                )
+            })?;
+
+        Ok(result.deleted_count > 0)
+    }
+
     /// One row by version, whatever its status: the only reader that can tell
     /// "no such version" from "already applied".
     pub async fn record(&self, version: u32) -> Result<Option<MigrationRecord>> {
@@ -234,6 +287,8 @@ impl Store {
     }
 
     pub async fn ensure_nothing_unfinished(&self, env: &str) -> Result<()> {
+        self.ensure_nothing_unknown(env).await?;
+
         let unfinished = self.unfinished().await?;
         if unfinished.is_empty() {
             return Ok(());
@@ -271,6 +326,34 @@ impl Store {
 
     /// The highest version that ran to completion, or `None` if the database is
     /// empty or holds only a baseline.
+    /// Refuses while any row carries a status mongor does not know. Such a row
+    /// cannot be reasoned about: it is not applied, not unfinished, and the
+    /// unique index will not let a new one take its place.
+    pub async fn ensure_nothing_unknown(&self, env: &str) -> Result<()> {
+        let unknown = self.unknown_rows().await?;
+        if unknown.is_empty() {
+            return Ok(());
+        }
+
+        let collection = self.migrations.name();
+        let mut lines = vec![format!(
+            "{} row(s) in {collection} have a status mongor does not know",
+            unknown.len()
+        )];
+
+        for (version, status) in &unknown {
+            lines.push(format!("  {version:05}  status `{status}`"));
+        }
+
+        lines.push(String::new());
+        lines.push("Inspect the database, then clear each row:".to_string());
+        for (version, _) in &unknown {
+            lines.push(format!("  mongor resolve {version} --env {env} --retry"));
+        }
+
+        bail!("{}", lines.join("\n"))
+    }
+
     pub async fn last_applied(&self) -> Result<Option<MigrationRecord>> {
         self.migrations
             .find_one(doc! { "status": to_bson(&MigrationStatus::Success)? })
