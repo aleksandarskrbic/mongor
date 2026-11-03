@@ -230,7 +230,11 @@ fn an_unfinished_row_blocks_both_migrate_and_rollback() {
             .assert()
             .failure()
             .stderr(predicate::str::contains("1 unfinished migration(s)"))
-            .stderr(predicate::str::contains("it may still be running"));
+            .stderr(predicate::str::contains("it may still be running"))
+            // The refusal names the command that clears it.
+            .stderr(predicate::str::contains(
+                "mongor resolve 1 --env test --retry",
+            ));
     }
 }
 
@@ -507,4 +511,145 @@ fn status_does_not_create_the_collection() {
         project.eval(r#"print(db.getCollectionNames().length)"#),
         "0"
     );
+}
+
+/// A migration that writes one document and then throws, leaving a `failed`
+/// row and a database that was genuinely modified.
+fn fail_one_migration(project: &Project) {
+    project.write(
+        "00001_half_done.up.js",
+        r#"db.users.insertOne({ n: 1 });
+throw new Error("boom");"#,
+    );
+
+    project
+        .mongor()
+        .args(["migrate", "--env", "test", "--yes"])
+        .assert()
+        .failure();
+
+    assert_eq!(project.recorded_status(1).as_deref(), Some("failed"));
+}
+
+#[test]
+fn resolve_retry_clears_the_row_so_migrate_runs_it_again() {
+    let project = Project::new("mongor_it_resolve_retry");
+    fail_one_migration(&project);
+
+    project
+        .mongor()
+        .args(["resolve", "1", "--env", "test", "--retry", "--yes"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("is cleared"));
+
+    assert_eq!(project.recorded_status(1), None);
+
+    // Fixed by hand, the way an operator would before retrying.
+    project.write("00001_half_done.up.js", r#"db.users.insertOne({ n: 2 });"#);
+
+    project
+        .mongor()
+        .args(["migrate", "--env", "test", "--yes"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("applied 1 migration(s)"));
+
+    assert_eq!(project.recorded_status(1).as_deref(), Some("success"));
+    // Both documents: --retry never undid what the failed script wrote.
+    assert_eq!(project.eval("print(db.users.countDocuments())"), "2");
+}
+
+#[test]
+fn resolve_applied_records_success_without_running_the_script() {
+    let project = Project::new("mongor_it_resolve_applied");
+    fail_one_migration(&project);
+
+    project
+        .mongor()
+        .args(["resolve", "1", "--env", "test", "--applied", "--yes"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("recorded as applied"));
+
+    assert_eq!(project.recorded_status(1).as_deref(), Some("success"));
+    // The script did not run a second time.
+    assert_eq!(project.eval("print(db.users.countDocuments())"), "1");
+    // The duration is cleared: it timed the attempt that failed.
+    assert_eq!(
+        project.eval("print(db.mongor_migrations.findOne({ version: 1 }).executionTimeMs)"),
+        "null"
+    );
+
+    project
+        .mongor()
+        .args(["migrate", "--env", "test", "--yes"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("nothing to migrate"));
+}
+
+#[test]
+fn resolve_refuses_rows_that_are_not_unfinished() {
+    let project = Project::new("mongor_it_resolve_refuses");
+    project.write("00001_add_user.up.js", r#"db.users.insertOne({ n: 1 });"#);
+
+    // No row at all.
+    project
+        .mongor()
+        .args(["resolve", "1", "--env", "test", "--retry", "--yes"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("no row for 00001"));
+
+    project
+        .mongor()
+        .args(["migrate", "--env", "test", "--yes"])
+        .assert()
+        .success();
+
+    // History, not an attempt.
+    project
+        .mongor()
+        .args(["resolve", "1", "--env", "test", "--retry", "--yes"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("already applied"));
+
+    assert_eq!(project.recorded_status(1).as_deref(), Some("success"));
+}
+
+#[test]
+fn resolve_requires_exactly_one_action() {
+    let project = Project::new("mongor_it_resolve_args");
+
+    project
+        .mongor()
+        .args(["resolve", "1", "--env", "test"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("<--retry|--applied>"));
+
+    project
+        .mongor()
+        .args(["resolve", "1", "--env", "test", "--retry", "--applied"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("cannot be used with"));
+}
+
+#[test]
+fn resolve_refuses_to_run_without_confirmation() {
+    let project = Project::new("mongor_it_resolve_confirm");
+    fail_one_migration(&project);
+
+    project
+        .mongor()
+        .args(["resolve", "1", "--env", "test", "--retry"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("does not undo"))
+        .stderr(predicate::str::contains("stdin is not a terminal"));
+
+    assert_eq!(project.recorded_status(1).as_deref(), Some("failed"));
 }

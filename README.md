@@ -99,6 +99,7 @@ export MONGO_PROD_URI="mongodb://..."
 | `mongor migrate` | Apply pending migrations (`--yes` to skip the prompt) | yes |
 | `mongor rollback` | Run the matching `.down.js` for the latest migration (`--yes` to skip the prompt) | yes |
 | `mongor baseline` | Adopt a database that already has the schema | yes |
+| `mongor resolve <version>` | Clear or accept the row left by a failed migration | yes |
 
 `mongor migrate` and `mongor rollback` print what they are about to do and then
 ask you to type `yes`, the way `terraform apply` does. In a pipeline, where
@@ -110,6 +111,20 @@ mongor migrate --env prod             # prints the plan, waits for `yes`
 mongor migrate --env prod --yes       # applies straight away, for CI
 mongor rollback --env prod --yes
 ```
+
+When a migration fails or its process is lost, the row it left behind blocks
+`migrate` and `rollback` until a human looks at the database. `mongor resolve`
+is how you unblock it, once you know what the script managed to do:
+
+```sh
+mongor resolve 3 --env prod --retry      # forget the attempt; migrate runs it again
+mongor resolve 3 --env prod --applied    # you finished the work by hand
+```
+
+`resolve` never runs a script. `--retry` does not undo what the failed script
+already changed, and `--applied` does not run anything — both only edit mongor's
+own record of what happened. It refuses rows that are not unfinished: an applied
+migration is history, and `rollback` is the command for undoing one.
 
 ## Design notes
 

@@ -28,6 +28,9 @@ pub enum Commands {
 
     /// Undo the most recently applied migration
     Rollback(RollbackArgs),
+
+    /// Repair the row left by a failed or interrupted migration
+    Resolve(ResolveArgs),
 }
 
 #[derive(Args)]
@@ -81,4 +84,37 @@ pub struct RollbackArgs {
     /// Roll back without asking for confirmation
     #[arg(long)]
     pub yes: bool,
+}
+
+#[derive(Args)]
+pub struct ResolveArgs {
+    /// Version of the migration to resolve, e.g. 3
+    pub version: u32,
+
+    /// Environment from mongor.toml to target
+    #[arg(long)]
+    pub env: String,
+
+    #[command(flatten)]
+    pub action: ResolveAction,
+
+    /// Resolve without asking for confirmation
+    #[arg(long)]
+    pub yes: bool,
+}
+
+// `required` with `multiple = false` is how clap spells "exactly one of these".
+// A plain `Args` struct implies `multiple = true`, so it has to be turned off,
+// and the group needs its own struct: on `ResolveArgs` it would count `--env`
+// as one of the choices.
+#[derive(Args)]
+#[group(required = true, multiple = false)]
+pub struct ResolveAction {
+    /// Forget the attempt so `migrate` runs the migration again
+    #[arg(long)]
+    pub retry: bool,
+
+    /// Record the migration as applied without running it
+    #[arg(long)]
+    pub applied: bool,
 }

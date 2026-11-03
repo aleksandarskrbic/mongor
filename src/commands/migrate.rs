@@ -41,7 +41,7 @@ impl Migrate {
     }
 
     pub async fn run(&self) -> Result<()> {
-        self.store.ensure_nothing_unfinished().await?;
+        self.store.ensure_nothing_unfinished(&self.env).await?;
 
         let migrations = migration::discover(&self.migrations_dir)?;
         if migrations.is_empty() {

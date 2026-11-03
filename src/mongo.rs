@@ -213,7 +213,16 @@ impl Store {
     /// Refuses to go on while any row is unfinished. A script that did not
     /// finish may have changed the database, and MongoDB will not undo it for
     /// us, so the only safe move is to stop and let a human look.
-    pub async fn ensure_nothing_unfinished(&self) -> Result<()> {
+    /// One row by version, whatever its status: the only reader that can tell
+    /// "no such version" from "already applied".
+    pub async fn record(&self, version: u32) -> Result<Option<MigrationRecord>> {
+        self.migrations
+            .find_one(doc! { "version": version })
+            .await
+            .with_context(|| format!("failed to query {}", self.migrations.name()))
+    }
+
+    pub async fn ensure_nothing_unfinished(&self, env: &str) -> Result<()> {
         let unfinished = self.unfinished().await?;
         if unfinished.is_empty() {
             return Ok(());
@@ -226,21 +235,9 @@ impl Store {
         )];
 
         for record in &unfinished {
-            let detail = match record.status {
-                // Possibly still running: killing mongor does not kill mongosh.
-                MigrationStatus::Running => format!(
-                    "started {} and never finished - it may still be running",
-                    timestamp(record.started_at)
-                ),
-                MigrationStatus::RollingBack => format!(
-                    "was being rolled back at {} and never finished",
-                    timestamp(record.started_at)
-                ),
-                MigrationStatus::Failed => {
-                    format!("started {} and failed", timestamp(record.started_at))
-                }
-                // unfinished() cannot return either of these.
-                MigrationStatus::Success | MigrationStatus::Baseline => continue,
+            // unfinished() cannot return a row without a detail line.
+            let Some(detail) = unfinished_detail(record) else {
+                continue;
             };
 
             lines.push(format!(
@@ -250,10 +247,10 @@ impl Store {
         }
 
         lines.push(String::new());
-        lines.push("Inspect the database, then clear the row to retry:".to_string());
+        lines.push("Inspect the database, then resolve each row:".to_string());
         for record in &unfinished {
             lines.push(format!(
-                "  db.getCollection(\"{collection}\").deleteOne({{ version: {} }})",
+                "  mongor resolve {} --env {env} --retry",
                 record.version
             ));
         }
@@ -302,6 +299,31 @@ impl Store {
             .update_one(
                 doc! { "version": version },
                 doc! { "$set": { "status": to_bson(&status)? } },
+            )
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to update {version:05} in {}",
+                    self.migrations.name()
+                )
+            })?;
+
+        Ok(())
+    }
+
+    /// Marks a version applied although mongor never saw its script succeed.
+    ///
+    /// The duration is cleared rather than kept: it timed the attempt that
+    /// failed, and no honest number describes a run that never happened.
+    pub async fn mark_applied(&self, version: u32) -> Result<()> {
+        self.migrations
+            .update_one(
+                doc! { "version": version },
+                doc! { "$set": {
+                    "status": to_bson(&MigrationStatus::Success)?,
+                    "finishedAt": DateTime::now(),
+                    "executionTimeMs": Bson::Null,
+                }},
             )
             .await
             .with_context(|| {
@@ -395,6 +417,30 @@ impl Store {
 
         Ok(found.into_iter().map(|r| (r.version, r)).collect())
     }
+}
+
+/// The sentence describing an unfinished row, shared so that the refusal which
+/// blocks an operator and the `resolve` that unblocks them read identically.
+///
+/// `None` for the two statuses that are not unfinished at all.
+pub(crate) fn unfinished_detail(record: &MigrationRecord) -> Option<String> {
+    let detail = match record.status {
+        // Possibly still running: killing mongor does not kill mongosh.
+        MigrationStatus::Running => format!(
+            "started {} and never finished - it may still be running",
+            timestamp(record.started_at)
+        ),
+        MigrationStatus::RollingBack => format!(
+            "was being rolled back at {} and never finished",
+            timestamp(record.started_at)
+        ),
+        MigrationStatus::Failed => {
+            format!("started {} and failed", timestamp(record.started_at))
+        }
+        MigrationStatus::Success | MigrationStatus::Baseline => return None,
+    };
+
+    Some(detail)
 }
 
 /// The server reports a duplicate key as a write error on an insert and as a

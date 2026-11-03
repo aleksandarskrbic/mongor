@@ -36,7 +36,7 @@ impl Rollback {
     }
 
     pub async fn run(&self) -> Result<()> {
-        self.store.ensure_nothing_unfinished().await?;
+        self.store.ensure_nothing_unfinished(&self.env).await?;
 
         let Some(record) = self.store.last_applied().await? else {
             println!("nothing to roll back in {}", self.env);
