@@ -1,7 +1,9 @@
+use crate::migration::Migration;
 use crate::mongo::{MigrationRecord, MigrationStatus, Store};
 use crate::prompt::confirm;
 use crate::{config, mongo};
 use anyhow::{Result, bail};
+use std::path::PathBuf;
 
 /// Repairs the row left behind by a migration that failed or never finished.
 ///
@@ -13,6 +15,7 @@ pub struct Resolve {
     store: Store,
     version: u32,
     action: Action,
+    migrations_dir: PathBuf,
     yes: bool,
 }
 
@@ -48,6 +51,7 @@ impl Resolve {
             store,
             version,
             action,
+            migrations_dir: cfg.migrations.path,
             yes,
         })
     }
@@ -80,24 +84,59 @@ impl Resolve {
 
         println!();
 
-        match self.action {
-            Action::Retry => {
-                self.store.remove(record.version).await?;
-                println!(
-                    "  {:05} {} is cleared - migrate will run {} again",
-                    record.version, record.name, record.file_name
-                );
-            }
+        // Both writes carry the status `detail()` validated, so a migration that
+        // finished while the operator was deciding is not overwritten. The
+        // window is real even under --yes: the read above and the write here are
+        // separate round trips.
+        let acted = match self.action {
+            Action::Retry => self.store.remove_unfinished(record.version).await?,
             Action::Applied => {
-                self.store.mark_applied(record.version).await?;
-                println!(
-                    "  {:05} {} is recorded as applied - its script was not run",
-                    record.version, record.name
-                );
+                let checksum = self.checksum_on_disk(&record)?;
+                self.store
+                    .mark_applied(record.version, checksum.as_deref())
+                    .await?
             }
+        };
+
+        if !acted {
+            bail!(
+                "{:05} is no longer unfinished - it changed while this command was running\n  \
+                 run `mongor status --env {}` to see where it got to",
+                record.version,
+                self.env
+            );
+        }
+
+        match self.action {
+            Action::Retry => println!(
+                "  {:05} {} is cleared - migrate will run {} again",
+                record.version, record.name, record.file_name
+            ),
+            Action::Applied => println!(
+                "  {:05} {} is recorded as applied - its script was not run",
+                record.version, record.name
+            ),
         }
 
         Ok(())
+    }
+
+    /// The migration's checksum as the file stands now, or `None` when the file
+    /// is gone - in which case the recorded one is all there is.
+    fn checksum_on_disk(&self, record: &MigrationRecord) -> Result<Option<String>> {
+        let path = self.migrations_dir.join(&record.file_name);
+        if !path.is_file() {
+            return Ok(None);
+        }
+
+        let migration = Migration {
+            version: record.version,
+            name: record.name.clone(),
+            file_name: record.file_name.clone(),
+            path,
+        };
+
+        Ok(Some(migration.checksum()?))
     }
 
     /// Only the rows `Store::unfinished` returns can be resolved. A `success`

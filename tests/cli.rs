@@ -1009,3 +1009,38 @@ fn completions_rejects_an_unknown_shell() {
         // The accepted list comes from clap_complete, not from us.
         .stderr(predicate::str::contains("zsh"));
 }
+
+#[test]
+fn resolve_applied_re_records_the_checksum_from_disk() {
+    let project = Project::new("mongor_it_resolve_checksum");
+    fail_one_migration(&project);
+    project.write("00002_next.up.js", r#"db.users.insertOne({ n: 2 });"#);
+
+    // The operator finishes 00001 by hand and fixes the script, which is the
+    // whole point of --applied. The edit happened after it FAILED, not after it
+    // was applied, so it must not trip the immutability guard.
+    project.write("00001_half_done.up.js", r#"db.users.insertOne({ n: 1 });"#);
+
+    project
+        .mongor()
+        .args(["resolve", "1", "--env", "test", "--applied", "--yes"])
+        .assert()
+        .success();
+
+    project
+        .mongor()
+        .args(["migrate", "--env", "test", "--yes"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("applied 1 migration(s)"));
+
+    // Warnings about the absent .down.js files are expected; a checksum error
+    // is not.
+    project
+        .mongor()
+        .args(["validate", "--env", "test"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("error  checksum").not())
+        .stdout(predicate::str::contains("no errors"));
+}

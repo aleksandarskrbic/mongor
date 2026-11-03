@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, anyhow, bail};
 use futures_util::TryStreamExt;
-use mongodb::bson::{Bson, DateTime, doc, to_bson};
+use mongodb::bson::{Bson, DateTime, Document, doc, to_bson};
 use mongodb::error::{ErrorKind, WriteFailure};
 use mongodb::options::IndexOptions;
 use mongodb::{Collection, Database, IndexModel};
@@ -170,7 +170,8 @@ impl Store {
         status: MigrationStatus,
         execution_time_ms: i64,
     ) -> Result<()> {
-        self.migrations
+        let result = self
+            .migrations
             .update_one(
                 doc! { "version": version },
                 doc! { "$set": {
@@ -186,6 +187,16 @@ impl Store {
                     self.migrations.name()
                 )
             })?;
+
+        // A zero-match update means the row was deleted while the script ran -
+        // almost always a `mongor resolve --retry` against a live migration.
+        // Reporting success would claim history that no longer exists.
+        if result.matched_count == 0 {
+            bail!(
+                "{version:05} has no row in {} any more - it was removed while the migration was running",
+                self.migrations.name()
+            );
+        }
 
         Ok(())
     }
@@ -315,15 +326,27 @@ impl Store {
     ///
     /// The duration is cleared rather than kept: it timed the attempt that
     /// failed, and no honest number describes a run that never happened.
-    pub async fn mark_applied(&self, version: u32) -> Result<()> {
-        self.migrations
+    /// Only an unfinished row: `false` means it stopped being one between the
+    /// read that authorised this and the write.
+    pub async fn mark_applied(&self, version: u32, checksum: Option<&str>) -> Result<bool> {
+        let mut set = doc! {
+            "status": to_bson(&MigrationStatus::Success)?,
+            "finishedAt": DateTime::now(),
+            "executionTimeMs": Bson::Null,
+        };
+
+        // Re-recorded from disk, so fixing the script before accepting the
+        // migration does not leave this environment tripping the immutability
+        // guard for an edit made before it was ever applied.
+        if let Some(checksum) = checksum {
+            set.insert("checksum", checksum);
+        }
+
+        let result = self
+            .migrations
             .update_one(
-                doc! { "version": version },
-                doc! { "$set": {
-                    "status": to_bson(&MigrationStatus::Success)?,
-                    "finishedAt": DateTime::now(),
-                    "executionTimeMs": Bson::Null,
-                }},
+                doc! { "version": version, "status": unfinished_filter()? },
+                doc! { "$set": set },
             )
             .await
             .with_context(|| {
@@ -333,7 +356,26 @@ impl Store {
                 )
             })?;
 
-        Ok(())
+        Ok(result.matched_count > 0)
+    }
+
+    /// Drops an unfinished row so `migrate` offers the migration again.
+    ///
+    /// `false` means there was nothing unfinished left to drop, which is how a
+    /// migration that completed while the operator was deciding is caught.
+    pub async fn remove_unfinished(&self, version: u32) -> Result<bool> {
+        let result = self
+            .migrations
+            .delete_one(doc! { "version": version, "status": unfinished_filter()? })
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to delete {version:05} from {}",
+                    self.migrations.name()
+                )
+            })?;
+
+        Ok(result.deleted_count > 0)
     }
 
     /// Drops the row: the migration is no longer applied, so `migrate` will
@@ -417,6 +459,19 @@ impl Store {
 
         Ok(found.into_iter().map(|r| (r.version, r)).collect())
     }
+}
+
+/// The statuses `unfinished` returns, as a filter fragment. A write authorised
+/// by reading one of these must not land on a row that has since become
+/// something else.
+fn unfinished_filter() -> Result<Document> {
+    Ok(doc! {
+        "$in": [
+            to_bson(&MigrationStatus::Running)?,
+            to_bson(&MigrationStatus::RollingBack)?,
+            to_bson(&MigrationStatus::Failed)?,
+        ]
+    })
 }
 
 /// The sentence describing an unfinished row, shared so that the refusal which
