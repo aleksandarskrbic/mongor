@@ -1,7 +1,8 @@
+use crate::migration;
 use crate::mongo::{MigrationStatus, Store};
 use crate::mongosh::Mongosh;
 use crate::prompt::confirm;
-use crate::{config, migration};
+use crate::workspace::Workspace;
 use anyhow::{Context, Result, bail};
 use std::path::PathBuf;
 use std::time::Instant;
@@ -18,19 +19,14 @@ pub struct Rollback {
 
 impl Rollback {
     pub async fn new(env: String, yes: bool) -> Result<Self> {
-        let cfg = config::load()?;
-        let environment = cfg.environment(&env)?;
-        let uri = config::resolve_uri(environment)?;
-
-        let mongosh = Mongosh::resolve().await?;
-        let store = Store::connect(&uri, &environment.database, &cfg.migrations.collection).await?;
+        let (workspace, mongosh) = Workspace::open_with_mongosh(&env).await?;
 
         Ok(Self {
             env,
-            uri,
-            store,
+            uri: workspace.uri,
+            store: workspace.store,
             mongosh,
-            migrations_dir: cfg.migrations.path,
+            migrations_dir: workspace.migrations_dir,
             yes,
         })
     }

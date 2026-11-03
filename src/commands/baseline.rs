@@ -1,5 +1,6 @@
+use crate::migration;
 use crate::mongo::Store;
-use crate::{config, migration};
+use crate::workspace::Workspace;
 use anyhow::{Result, bail};
 use std::path::PathBuf;
 
@@ -14,16 +15,12 @@ pub struct Baseline {
 
 impl Baseline {
     pub async fn new(env: String, version: Option<u32>) -> Result<Self> {
-        let cfg = config::load()?;
-        let environment = cfg.environment(&env)?;
-        let uri = config::resolve_uri(environment)?;
-
-        let store = Store::connect(&uri, &environment.database, &cfg.migrations.collection).await?;
+        let workspace = Workspace::open(&env).await?;
 
         Ok(Self {
             env,
-            store,
-            migrations_dir: cfg.migrations.path,
+            store: workspace.store,
+            migrations_dir: workspace.migrations_dir,
             version,
         })
     }

@@ -5,6 +5,7 @@ mod migration;
 mod mongo;
 mod mongosh;
 mod prompt;
+mod workspace;
 
 use anyhow::Result;
 use clap::Parser;

@@ -1,6 +1,7 @@
+use crate::migration;
 use crate::mongo::{MigrationStatus, Store};
 use crate::mongosh::Mongosh;
-use crate::{config, migration};
+use crate::workspace::Workspace;
 use anyhow::Result;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -14,16 +15,12 @@ pub struct Status {
 
 impl Status {
     pub async fn new(env: String) -> Result<Self> {
-        let cfg = config::load()?;
-        let environment = cfg.environment(&env)?;
-        let uri = config::resolve_uri(environment)?;
-
-        let store = Store::connect(&uri, &environment.database, &cfg.migrations.collection).await?;
+        let workspace = Workspace::open(&env).await?;
 
         Ok(Self {
             env,
-            store,
-            migrations_dir: cfg.migrations.path,
+            store: workspace.store,
+            migrations_dir: workspace.migrations_dir,
         })
     }
 

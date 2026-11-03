@@ -1,7 +1,7 @@
 use crate::migration::Migration;
-use crate::mongo::{MigrationRecord, MigrationStatus, Store};
+use crate::mongo::{self, MigrationRecord, MigrationStatus, Store};
 use crate::prompt::confirm;
-use crate::{config, mongo};
+use crate::workspace::Workspace;
 use anyhow::{Result, bail};
 use std::path::PathBuf;
 
@@ -40,18 +40,14 @@ impl Resolve {
             _ => bail!("pass exactly one of --retry and --applied"),
         };
 
-        let cfg = config::load()?;
-        let environment = cfg.environment(&env)?;
-        let uri = config::resolve_uri(environment)?;
-
-        let store = Store::connect(&uri, &environment.database, &cfg.migrations.collection).await?;
+        let workspace = Workspace::open(&env).await?;
 
         Ok(Self {
             env,
-            store,
+            store: workspace.store,
             version,
             action,
-            migrations_dir: cfg.migrations.path,
+            migrations_dir: workspace.migrations_dir,
             yes,
         })
     }

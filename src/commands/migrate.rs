@@ -1,8 +1,8 @@
-use crate::migration::Migration;
+use crate::migration::{self, Migration};
 use crate::mongo::{MigrationRecord, MigrationStatus, Store};
 use crate::mongosh::Mongosh;
 use crate::prompt::confirm;
-use crate::{config, migration};
+use crate::workspace::Workspace;
 use anyhow::{Context, Result, bail};
 use mongodb::bson::DateTime;
 use std::collections::BTreeMap;
@@ -23,22 +23,14 @@ pub struct Migrate {
 
 impl Migrate {
     pub async fn new(env: String, to: Option<u32>, yes: bool, dry_run: bool) -> Result<Self> {
-        let cfg = config::load()?;
-        let environment = cfg.environment(&env)?;
-        let uri = config::resolve_uri(environment)?;
-
-        // Unlike `status`, a missing mongosh is fatal, so resolve it before
-        // opening a connection we would only throw away. A dry run resolves it
-        // too: a plan that ignores a precondition of the run is not a plan.
-        let mongosh = Mongosh::resolve().await?;
-        let store = Store::connect(&uri, &environment.database, &cfg.migrations.collection).await?;
+        let (workspace, mongosh) = Workspace::open_with_mongosh(&env).await?;
 
         Ok(Self {
             env,
-            uri,
-            store,
+            uri: workspace.uri,
+            store: workspace.store,
             mongosh,
-            migrations_dir: cfg.migrations.path,
+            migrations_dir: workspace.migrations_dir,
             to,
             yes,
             dry_run,
