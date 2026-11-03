@@ -77,4 +77,8 @@ pub struct RollbackArgs {
     /// Environment from mongor.toml to target
     #[arg(long)]
     pub env: String,
+
+    /// Roll back without asking for confirmation
+    #[arg(long)]
+    pub yes: bool,
 }

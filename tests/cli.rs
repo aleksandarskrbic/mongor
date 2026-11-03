@@ -251,7 +251,7 @@ fn rollback_undoes_the_last_migration_and_makes_it_pending_again() {
 
     project
         .mongor()
-        .args(["rollback", "--env", "test"])
+        .args(["rollback", "--env", "test", "--yes"])
         .assert()
         .success()
         .stdout(predicate::str::contains("rolled back"));
@@ -281,7 +281,7 @@ fn rollback_refuses_when_the_down_script_is_missing() {
 
     project
         .mongor()
-        .args(["rollback", "--env", "test"])
+        .args(["rollback", "--env", "test", "--yes"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("has no rollback script"));
@@ -309,7 +309,7 @@ fn rollback_refuses_when_the_down_script_is_only_comments() {
     // than claiming it undid something.
     project
         .mongor()
-        .args(["rollback", "--env", "test"])
+        .args(["rollback", "--env", "test", "--yes"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("contains no statements"));
@@ -396,4 +396,32 @@ fn migrate_refuses_to_apply_without_confirmation() {
 
     assert_eq!(project.eval("print(db.users.countDocuments())"), "0");
     assert_eq!(project.recorded_status(1), None);
+}
+
+#[test]
+fn rollback_refuses_to_run_without_confirmation() {
+    let project = Project::new("mongor_it_rollback_confirm");
+    project.write("00001_add_user.up.js", r#"db.users.insertOne({ n: 1 });"#);
+    project.write(
+        "00001_add_user.down.js",
+        r#"db.users.deleteMany({ n: 1 });"#,
+    );
+
+    project
+        .mongor()
+        .args(["migrate", "--env", "test", "--yes"])
+        .assert()
+        .success();
+
+    project
+        .mongor()
+        .args(["rollback", "--env", "test"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("00001  add_user"))
+        .stderr(predicate::str::contains("stdin is not a terminal"));
+
+    // Still applied, and the document the migration wrote is untouched.
+    assert_eq!(project.recorded_status(1).as_deref(), Some("success"));
+    assert_eq!(project.eval("print(db.users.countDocuments())"), "1");
 }

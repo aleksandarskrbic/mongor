@@ -1,11 +1,11 @@
 use crate::migration::Migration;
 use crate::mongo::{MigrationRecord, MigrationStatus, Store};
 use crate::mongosh::Mongosh;
+use crate::prompt::confirm;
 use crate::{config, migration};
 use anyhow::{Context, Result, bail};
 use mongodb::bson::DateTime;
 use std::collections::BTreeMap;
-use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
 use std::time::Instant;
 
@@ -197,35 +197,4 @@ impl Migrate {
 
         Ok(())
     }
-}
-
-/// Blocks until the operator types `yes`.
-///
-/// Only the exact word is accepted: `y` and a bare newline are easy to type by
-/// reflex, which is the opposite of what a confirmation is for.
-fn confirm(question: &str) -> Result<()> {
-    // Refusing beats prompting when nobody can answer. In CI stdin is a pipe,
-    // and a prompt there would hang until the job timed out.
-    if !std::io::stdin().is_terminal() {
-        bail!("{question}\n  stdin is not a terminal - pass --yes to apply without confirming");
-    }
-
-    print!("{question}\n  Only `yes` will be accepted.\n\n  Enter a value: ");
-
-    // stdout is line buffered and the prompt has no newline, so without this
-    // flush the question would appear after the answer was typed.
-    std::io::stdout().flush()?;
-
-    // Blocking read inside an async fn. Nothing else is running on the runtime
-    // while we wait for a human, so spawn_blocking would only add noise.
-    let mut answer = String::new();
-    // No newline of our own: we only read when stdin is a terminal, and the
-    // terminal already echoed the one the operator typed.
-    std::io::stdin().read_line(&mut answer)?;
-
-    if answer.trim() != "yes" {
-        bail!("cancelled");
-    }
-
-    Ok(())
 }

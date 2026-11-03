@@ -1,5 +1,6 @@
 use crate::mongo::{MigrationStatus, Store};
 use crate::mongosh::Mongosh;
+use crate::prompt::confirm;
 use crate::{config, migration};
 use anyhow::{Context, Result, bail};
 use std::path::PathBuf;
@@ -12,10 +13,11 @@ pub struct Rollback {
     store: Store,
     mongosh: Mongosh,
     migrations_dir: PathBuf,
+    yes: bool,
 }
 
 impl Rollback {
-    pub async fn new(env: String) -> Result<Self> {
+    pub async fn new(env: String, yes: bool) -> Result<Self> {
         let cfg = config::load()?;
         let environment = cfg.environment(&env)?;
         let uri = config::resolve_uri(environment)?;
@@ -29,6 +31,7 @@ impl Rollback {
             store,
             mongosh,
             migrations_dir: cfg.migrations.path,
+            yes,
         })
     }
 
@@ -66,12 +69,23 @@ impl Rollback {
         }
 
         println!(
-            "rolling back {:05} {} from {} ({})",
-            record.version,
-            record.name,
+            "1 migration to roll back from {} ({})",
             self.env,
             self.store.database_name()
         );
+        println!();
+        println!("  {:05}  {}  ({file_name})", record.version, record.name);
+
+        if !self.yes {
+            println!();
+
+            confirm(&format!(
+                "Do you want to roll back {:05} {}?",
+                record.version, record.name
+            ))?;
+        }
+
+        println!();
 
         // Marked before the script runs, for the same reason `migrate` marks a
         // migration running: losing the process must leave evidence behind.

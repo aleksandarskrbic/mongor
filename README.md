@@ -97,16 +97,18 @@ export MONGO_PROD_URI="mongodb://..."
 | `mongor new <name>` | Create the next `.up.js` and its `.down.js` | yes |
 | `mongor status` | Compare local files against applied history | yes |
 | `mongor migrate` | Apply pending migrations (`--yes` to skip the prompt) | yes |
-| `mongor rollback` | Run the matching `.down.js` for the latest migration | yes |
+| `mongor rollback` | Run the matching `.down.js` for the latest migration (`--yes` to skip the prompt) | yes |
 | `mongor baseline` | Adopt a database that already has the schema | yes |
 
-`mongor migrate` prints what it is about to apply and then asks you to type
-`yes`, the way `terraform apply` does. In a pipeline, where there is nobody to
-answer, it refuses rather than hanging — pass `--yes` to apply unattended:
+`mongor migrate` and `mongor rollback` print what they are about to do and then
+ask you to type `yes`, the way `terraform apply` does. In a pipeline, where
+there is nobody to answer, they refuse rather than hanging — pass `--yes` to run
+unattended:
 
 ```sh
-mongor migrate --env prod            # prints the plan, waits for `yes`
-mongor migrate --env prod --yes      # applies straight away, for CI
+mongor migrate --env prod             # prints the plan, waits for `yes`
+mongor migrate --env prod --yes       # applies straight away, for CI
+mongor rollback --env prod --yes
 ```
 
 ## Design notes
