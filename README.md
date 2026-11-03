@@ -67,7 +67,6 @@ syntax error, and the shell API is awaited for you.
 
 ```toml
 # mongor.toml
-default_env = "dev"
 
 [migrations]
 path = "migrations"
