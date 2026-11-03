@@ -354,10 +354,16 @@ impl Store {
         bail!("{}", lines.join("\n"))
     }
 
+    /// The migration applied most recently *in time*, which after a branch
+    /// merge is not the highest version - and undoing the highest version would
+    /// run a `.down.js` for a migration nobody just touched.
+    ///
+    /// `version` breaks ties, and sorts rows written before `finishedAt` existed
+    /// last, because a missing value sorts lowest descending.
     pub async fn last_applied(&self) -> Result<Option<MigrationRecord>> {
         self.migrations
             .find_one(doc! { "status": to_bson(&MigrationStatus::Success)? })
-            .sort(doc! { "version": -1 })
+            .sort(doc! { "finishedAt": -1, "version": -1 })
             .await
             .with_context(|| format!("failed to query {}", self.migrations.name()))
     }

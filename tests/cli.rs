@@ -1220,3 +1220,88 @@ fn a_hand_written_version_width_is_paired_correctly() {
 
     assert_eq!(project.eval("print(db.users.countDocuments())"), "0");
 }
+
+#[test]
+fn rollback_undoes_the_migration_applied_most_recently_in_time() {
+    let project = Project::new("mongor_it_rollback_order");
+
+    // Branch A: 00001 and 00003.
+    project.write("00001_base.up.js", r#"db.audit.insertOne({ v: 1 });"#);
+    project.write("00001_base.down.js", r#"db.audit.deleteMany({ v: 1 });"#);
+    project.write("00003_branch_a.up.js", r#"db.audit.insertOne({ v: 3 });"#);
+    project.write(
+        "00003_branch_a.down.js",
+        r#"db.audit.deleteMany({ v: 3 });"#,
+    );
+
+    project
+        .mongor()
+        .args(["migrate", "--env", "test", "--yes"])
+        .assert()
+        .success();
+
+    // Branch B merges 00002 in below the high-water mark and is applied last.
+    project.write("00002_branch_b.up.js", r#"db.audit.insertOne({ v: 2 });"#);
+    project.write(
+        "00002_branch_b.down.js",
+        r#"db.audit.deleteMany({ v: 2 });"#,
+    );
+
+    project
+        .mongor()
+        .args(["migrate", "--env", "test", "--yes"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("applied 1 migration(s)"));
+
+    // 00002 is the most recently applied; 00003 is merely the highest version.
+    project
+        .mongor()
+        .args(["rollback", "--env", "test", "--yes"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("00002  branch_b"))
+        .stdout(predicate::str::contains("00003").not());
+
+    assert_eq!(
+        project.eval("print(db.audit.countDocuments({ v: 2 }))"),
+        "0"
+    );
+    // 00003's data is untouched, and it is still recorded as applied.
+    assert_eq!(
+        project.eval("print(db.audit.countDocuments({ v: 3 }))"),
+        "1"
+    );
+    assert_eq!(project.recorded_status(3).as_deref(), Some("success"));
+}
+
+#[test]
+fn migrate_to_allows_a_target_below_an_applied_version() {
+    let project = Project::new("mongor_it_to_out_of_order");
+    project.write("00001_base.up.js", r#"db.users.insertOne({ n: 1 });"#);
+    project.write("00003_branch_a.up.js", r#"db.users.insertOne({ n: 3 });"#);
+
+    project
+        .mongor()
+        .args(["migrate", "--env", "test", "--yes"])
+        .assert()
+        .success();
+
+    // The normal result of merging two branches. Uncapped migrate applies this
+    // without comment, so the capped form must not be the harder path.
+    project.write("00002_branch_b.up.js", r#"db.users.insertOne({ n: 2 });"#);
+    project.write("00004_later.up.js", r#"db.users.insertOne({ n: 4 });"#);
+
+    project
+        .mongor()
+        .args(["migrate", "--env", "test", "--to", "2", "--yes"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("applied 1 migration(s)"));
+
+    assert_eq!(
+        project.eval("print(db.users.countDocuments({ n: 2 }))"),
+        "1"
+    );
+    assert_eq!(project.recorded_status(4), None);
+}

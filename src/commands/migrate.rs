@@ -233,17 +233,10 @@ impl Migrate {
             );
         }
 
-        // Not the same as the check above: the target is pending, but the
-        // database is already past it, so the state it asks for cannot be built.
-        if let Some(latest) = applied.keys().next_back().copied()
-            && target < latest
-        {
-            bail!(
-                "--to {target:05} is behind {}, which is already at {latest:05} - roll back first, or raise --to",
-                self.env
-            );
-        }
-
+        // A target below an already-applied version is deliberately allowed:
+        // that is what merging two branches produces, and uncapped `migrate`
+        // applies it without comment. Refusing only the capped form would make
+        // the safer command the harder one.
         Ok(())
     }
 

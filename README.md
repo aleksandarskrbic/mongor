@@ -116,7 +116,13 @@ mongor migrate --env prod --to 42 --yes   # stops after 00042, for a staged roll
 
 `--to` is a one-shot target, not a desired state: it must name a migration that
 is actually pending, so a capped run can never exit 0 having applied nothing. A
-typo like `--to 1000` is refused rather than quietly applying everything.
+typo like `--to 1000` is refused rather than quietly applying everything. A
+target *below* an already-applied version is allowed, because that is what
+merging two branches produces and an uncapped `migrate` applies it anyway.
+
+`mongor rollback` undoes the migration applied most recently **in time**, not
+the highest version — after a branch merge those are different migrations, and
+undoing the highest version would run a `.down.js` nobody just touched.
 
 `--dry-run` prints the plan and stops before the first write — not even the
 history collection is created — so it is safe to run against production as a
@@ -167,8 +173,9 @@ warn   no-rollback      00003_drop_field.up.js 00003_drop_field.down.js has no s
 ```
 
 Errors are the things `migrate` would refuse: a modified applied migration, an
-applied row whose file is gone, an unfinished row, an empty migration, a
-mis-named script, a baseline above every file. Warnings are things worth knowing
+applied row whose file is gone or was renamed, an unfinished row, a row whose
+status mongor does not recognise, an empty migration, a mis-named script, a
+baseline above every file. Warnings are things worth knowing
 before a deploy rather than during an incident: a missing rollback, a version
 gap, an orphaned `.down.js`, a migration merged in below the high-water mark.
 
