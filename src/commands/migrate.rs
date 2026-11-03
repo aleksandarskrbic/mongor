@@ -112,11 +112,6 @@ impl Migrate {
             return Ok(());
         }
 
-        // Created here rather than in `Store::connect`: a read-only command
-        // must not create the collection, and a run with nothing pending must
-        // not either.
-        self.store.ensure_version_index().await?;
-
         // Listed only when we are about to ask: the apply loop below names each
         // migration as it runs, so printing them twice is noise. The count above
         // is what an interrupted unattended run still needs.
@@ -128,6 +123,12 @@ impl Migrate {
                 pending.len()
             ))?;
         }
+
+        // Below the prompt, not above it: `createIndexes` is DDL, and declining
+        // must leave a database mongor has never migrated exactly as it was.
+        // Still before the first script, so a permissions problem stops the run
+        // rather than half-applying it.
+        self.store.ensure_version_index().await?;
 
         println!();
         for m in &pending {

@@ -120,8 +120,10 @@ typo like `--to 1000` is refused rather than quietly applying everything.
 
 `--dry-run` prints the plan and stops before the first write — not even the
 history collection is created — so it is safe to run against production as a
-pre-flight check. It still enforces every read-only guard, so a plan is never
-printed for a run that would be refused:
+pre-flight check. It enforces every guard that only reads, so a checksum
+mismatch or an unfinished row is reported by the plan rather than discovered at
+apply time. The unique index is created after you agree, so a database whose
+user cannot run `createIndexes` passes the dry run and fails the real one:
 
 ```sh
 mongor migrate --env prod --dry-run

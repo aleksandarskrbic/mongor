@@ -1087,3 +1087,23 @@ fn resolve_applied_re_records_the_checksum_from_disk() {
         .stdout(predicate::str::contains("error  checksum").not())
         .stdout(predicate::str::contains("no errors"));
 }
+
+#[test]
+fn a_declined_migrate_writes_nothing_at_all() {
+    let project = Project::new("mongor_it_declined");
+    project.write("00001_add_user.up.js", r#"db.users.insertOne({ n: 1 });"#);
+
+    // Refused at the prompt because stdin is a pipe. Creating the index here
+    // would be DDL on a database the operator never agreed to touch.
+    project
+        .mongor()
+        .args(["migrate", "--env", "test"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("stdin is not a terminal"));
+
+    assert_eq!(
+        project.eval(r#"print(db.getCollectionNames().length)"#),
+        "0"
+    );
+}
