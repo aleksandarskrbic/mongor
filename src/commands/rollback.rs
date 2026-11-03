@@ -43,9 +43,14 @@ impl Rollback {
             return Ok(());
         };
 
-        // Built from the record rather than from disk, so a migration whose `V`
-        // file has since been deleted can still be rolled back.
-        let file_name = migration::rollback_file_name(record.version, &record.name);
+        // Looked up by what the file parses to, so a hand-written `1_x.down.js`
+        // is found; falling back to the generated name, so the error names the
+        // file mongor expected when there is nothing to find.
+        let found = migration::find_rollback(&self.migrations_dir, record.version, &record.name)?;
+        let file_name = found
+            .as_ref()
+            .map(|r| r.file_name.clone())
+            .unwrap_or_else(|| migration::rollback_file_name(record.version, &record.name));
         let script = self.migrations_dir.join(&file_name);
 
         if !script.is_file() {

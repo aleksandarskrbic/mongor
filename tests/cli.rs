@@ -1107,3 +1107,116 @@ fn a_declined_migrate_writes_nothing_at_all() {
         "0"
     );
 }
+
+#[test]
+fn validate_ignores_hidden_files_and_directories() {
+    let project = Project::new("mongor_it_validate_hidden");
+    project.write("00001_add_user.up.js", r#"db.users.insertOne({ n: 1 });"#);
+    project.write(
+        "00001_add_user.down.js",
+        r#"db.users.deleteMany({ n: 1 });"#,
+    );
+
+    // An editor swap file the developer never created, and a directory that
+    // happens to be named like a script.
+    project.write(".00001_add_user.up.js.swp", "junk");
+    std::fs::create_dir(project.path("00002_notes.up.js")).unwrap();
+
+    project
+        .mongor()
+        .args(["validate", "--offline"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("error").not())
+        .stdout(predicate::str::contains("no problems found"));
+}
+
+#[test]
+fn validate_survives_two_rollbacks_at_one_version() {
+    let project = Project::new("mongor_it_validate_dup_down");
+    project.write("00001_add_user.up.js", r#"db.users.insertOne({ n: 1 });"#);
+    project.write(
+        "00001_add_user.down.js",
+        r#"db.users.deleteMany({ n: 1 });"#,
+    );
+    // A stale half-rename: same version, different name.
+    project.write("00001_add_users.down.js", r#"db.users.drop();"#);
+    // And a real error, which must still be printed rather than lost.
+    project.write("00002_empty.up.js", "// nobody wrote this\n");
+
+    project
+        .mongor()
+        .args(["validate", "--offline"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("error  no-statements"))
+        .stdout(predicate::str::contains("warn   orphan-rollback"));
+}
+
+#[test]
+fn validate_catches_a_renamed_applied_migration() {
+    let project = Project::new("mongor_it_validate_rename");
+    project.write("00001_add_user.up.js", r#"db.users.insertOne({ n: 1 });"#);
+    project.write(
+        "00001_add_user.down.js",
+        r#"db.users.deleteMany({ n: 1 });"#,
+    );
+
+    project
+        .mongor()
+        .args(["migrate", "--env", "test", "--yes"])
+        .assert()
+        .success();
+
+    // Renamed with the contents untouched, so the checksum still matches and
+    // only rollback is broken.
+    std::fs::rename(
+        project.path("00001_add_user.up.js"),
+        project.path("00001_add_users.up.js"),
+    )
+    .unwrap();
+    std::fs::rename(
+        project.path("00001_add_user.down.js"),
+        project.path("00001_add_users.down.js"),
+    )
+    .unwrap();
+
+    project
+        .mongor()
+        .args(["validate", "--env", "test"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("error  renamed"))
+        .stdout(predicate::str::contains("rollback would look for"));
+}
+
+#[test]
+fn a_hand_written_version_width_is_paired_correctly() {
+    let project = Project::new("mongor_it_padding");
+    // migration::parse accepts any width on purpose, so the rest of mongor has
+    // to pair these without rebuilding a five-digit name.
+    project.write("1_handwritten.up.js", r#"db.users.insertOne({ n: 1 });"#);
+    project.write("1_handwritten.down.js", r#"db.users.deleteMany({ n: 1 });"#);
+
+    project
+        .mongor()
+        .args(["validate", "--offline"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("no-rollback").not());
+
+    project
+        .mongor()
+        .args(["migrate", "--env", "test", "--yes"])
+        .assert()
+        .success();
+
+    project
+        .mongor()
+        .args(["rollback", "--env", "test", "--yes"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("rolled back"));
+
+    assert_eq!(project.eval("print(db.users.countDocuments())"), "0");
+}

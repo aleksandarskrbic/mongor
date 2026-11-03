@@ -68,6 +68,7 @@ impl Validate {
         self.check_statements(&migrations, &applied, baseline, &mut errors)?;
         self.check_checksums(&migrations, &applied, &mut errors)?;
         self.check_missing_files(&migrations, &applied, &mut errors);
+        self.check_renames(&migrations, &applied, &mut errors);
         self.check_baseline(&migrations, baseline, &mut errors);
 
         if let Some(store) = &self.store {
@@ -196,6 +197,36 @@ impl Validate {
         }
     }
 
+    /// `rollback` builds the `.down.js` name from the recorded name, not from
+    /// disk, so renaming an applied migration leaves it unable to undo that
+    /// version - and the checksum is unchanged, so nothing else notices.
+    fn check_renames(
+        &self,
+        migrations: &[Migration],
+        applied: &BTreeMap<u32, MigrationRecord>,
+        errors: &mut Vec<String>,
+    ) {
+        for m in migrations {
+            let Some(record) = applied.get(&m.version) else {
+                continue;
+            };
+
+            if record.name == m.name {
+                continue;
+            }
+
+            errors.push(problem(
+                "renamed",
+                &m.file_name,
+                &format!(
+                    "is recorded as {} - rollback would look for {}",
+                    record.file_name,
+                    migration::rollback_file_name(record.version, &record.name)
+                ),
+            ));
+        }
+    }
+
     /// Migrate skips everything at or below the baseline, so a baseline above
     /// every file makes a deploy that does nothing look successful.
     fn check_baseline(
@@ -264,20 +295,28 @@ impl Validate {
     /// before the deploy rather than during the incident.
     fn check_rollbacks(&self, migrations: &[Migration], warnings: &mut Vec<String>) -> Result<()> {
         for m in migrations {
-            let file_name = migration::rollback_file_name(m.version, &m.name);
-            let path = self.migrations_dir.join(&file_name);
-
-            if !path.is_file() {
+            let Some(rollback) =
+                migration::find_rollback(&self.migrations_dir, m.version, &m.name)?
+            else {
                 warnings.push(problem(
                     "no-rollback",
                     &m.file_name,
-                    &format!("{file_name} is missing - this migration cannot be undone"),
+                    &format!(
+                        "{} is missing - this migration cannot be undone",
+                        migration::rollback_file_name(m.version, &m.name)
+                    ),
                 ));
-            } else if !migration::has_statements_in_file(&path)? {
+                continue;
+            };
+
+            if !migration::has_statements_in_file(&rollback.path)? {
                 warnings.push(problem(
                     "no-rollback",
                     &m.file_name,
-                    &format!("{file_name} has no statements - this migration cannot be undone"),
+                    &format!(
+                        "{} has no statements - this migration cannot be undone",
+                        rollback.file_name
+                    ),
                 ));
             }
         }

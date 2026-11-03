@@ -67,16 +67,41 @@ fn parse_suffixed<'a>(file_name: &'a str, suffix: &str) -> Option<(u32, &'a str)
 
 /// Returns every `<version>_<name>.up.js` in `migrations_dir`, sorted by version.
 pub fn discover(migrations_dir: &Path) -> Result<Vec<Migration>> {
-    discover_suffixed(migrations_dir, UP_SUFFIX, "migration")
+    let migrations = discover_suffixed(migrations_dir, UP_SUFFIX)?;
+
+    // Only migrations: two `.up.js` at one version have no defined order, so
+    // nothing can run. Two `.down.js` are merely untidy, and aborting here
+    // would throw away a whole `validate` report over one stale file.
+    for pair in migrations.windows(2) {
+        if pair[0].version == pair[1].version {
+            anyhow::bail!(
+                "duplicate migration version {:05}: {} and {}",
+                pair[0].version,
+                pair[0].file_name,
+                pair[1].file_name
+            );
+        }
+    }
+
+    Ok(migrations)
 }
 
 /// The `.down.js` half. Only `validate` discovers rollbacks: `rollback` builds
 /// the name from the record, so it can undo a migration whose `.up.js` is gone.
 pub fn discover_rollbacks(migrations_dir: &Path) -> Result<Vec<Migration>> {
-    discover_suffixed(migrations_dir, DOWN_SUFFIX, "rollback")
+    discover_suffixed(migrations_dir, DOWN_SUFFIX)
 }
 
-fn discover_suffixed(migrations_dir: &Path, suffix: &str, kind: &str) -> Result<Vec<Migration>> {
+/// The `.down.js` beside a migration, found by what it parses to rather than by
+/// rebuilding the name - so a hand-written `1_x.up.js` pairs with `1_x.down.js`
+/// instead of a five-digit name nobody wrote.
+pub fn find_rollback(migrations_dir: &Path, version: u32, name: &str) -> Result<Option<Migration>> {
+    Ok(discover_rollbacks(migrations_dir)?
+        .into_iter()
+        .find(|r| r.version == version && r.name == name))
+}
+
+fn discover_suffixed(migrations_dir: &Path, suffix: &str) -> Result<Vec<Migration>> {
     let entries = fs::read_dir(migrations_dir)
         .with_context(|| format!("failed to read {}", migrations_dir.display()))?;
 
@@ -85,6 +110,12 @@ fn discover_suffixed(migrations_dir: &Path, suffix: &str, kind: &str) -> Result<
     for entry in entries {
         let entry =
             entry.with_context(|| format!("failed to read {}", migrations_dir.display()))?;
+
+        // A directory named like a script is not one, and treating it as a
+        // migration turns every later read of it into an error.
+        if !entry.path().is_file() {
+            continue;
+        }
 
         let os_name = entry.file_name();
         let Some(file_name) = os_name.to_str() else {
@@ -104,18 +135,6 @@ fn discover_suffixed(migrations_dir: &Path, suffix: &str, kind: &str) -> Result<
     }
 
     migrations.sort_by_key(|m| m.version);
-
-    for pair in migrations.windows(2) {
-        if pair[0].version == pair[1].version {
-            anyhow::bail!(
-                "duplicate {kind} version {:05}: {} and {}",
-                pair[0].version,
-                pair[0].file_name,
-                pair[1].file_name
-            );
-        }
-    }
-
     Ok(migrations)
 }
 
@@ -134,12 +153,24 @@ pub fn suspicious_file_names(migrations_dir: &Path) -> Result<Vec<String>> {
         let entry =
             entry.with_context(|| format!("failed to read {}", migrations_dir.display()))?;
 
+        // A directory is not a script however it is named.
+        if !entry.path().is_file() {
+            continue;
+        }
+
         let os_name = entry.file_name();
         // A name that is not UTF-8 cannot be a migration, and we could not print
         // it back either.
         let Some(file_name) = os_name.to_str() else {
             continue;
         };
+
+        // Editor swap files and the like are not attempts at a migration, and
+        // failing someone's pre-commit check over `.00001_x.up.js.swp` - a file
+        // they never created - is worse than missing a real typo.
+        if file_name.starts_with('.') {
+            continue;
+        }
 
         if parse(file_name).is_none()
             && parse_rollback(file_name).is_none()
