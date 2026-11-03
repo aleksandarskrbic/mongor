@@ -34,6 +34,21 @@ cargo run -- --version
 cargo run -- help new
 ```
 
+## CI
+
+`.github/workflows/ci.yml` runs the same commands on every push and pull
+request, so you can reproduce a red build locally:
+
+```sh
+cargo fmt --all --check
+cargo clippy --all-targets -- -D warnings
+cargo test --all-targets          # needs docker compose up -d
+```
+
+The `test` job starts a `mongo:8` service container, installs `mongosh` from
+npm, and sets `MONGOR_TEST_URI=mongodb://localhost:27017` — the same URI the
+test fixture falls back to locally.
+
 ## Local MongoDB
 
 ```sh

@@ -1,10 +1,14 @@
 # mongor
 
+[![CI](https://github.com/aleksandarskrbic/mongor/actions/workflows/ci.yml/badge.svg)](https://github.com/aleksandarskrbic/mongor/actions/workflows/ci.yml)
+
 A standalone MongoDB migration CLI, written in Rust and inspired by Flyway and Goose.
 
-> **Status: early development.** The CLI skeleton parses commands; none of them do
-> real work yet. Not usable, not published to crates.io. Follow along if you like,
-> but don't point it at a database.
+> **Status: early development.** All six commands work and are covered by tests
+> that run against a real database. Not yet published to crates.io, no prebuilt
+> binaries, and no distributed lock — two `mongor migrate` runs against the same
+> database at the same time are not safe yet. Try it on something you can throw
+> away.
 
 ## Idea
 
