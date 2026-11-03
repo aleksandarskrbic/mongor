@@ -6,9 +6,9 @@ A standalone MongoDB migration CLI, written in Rust and inspired by Flyway and G
 
 > **Status: early development.** All six commands work and are covered by tests
 > that run against a real database. Not yet published to crates.io, no prebuilt
-> binaries, and no distributed lock — two `mongor migrate` runs against the same
-> database at the same time are not safe yet. Try it on something you can throw
-> away.
+> binaries, and no distributed lock — concurrent runs cannot apply the same
+> migration twice, but a whole run is not serialised. Try it on something you can
+> throw away.
 
 ## Idea
 
@@ -121,6 +121,13 @@ migration can be detected rather than blindly retried.
 Applied migrations are immutable. If a file's SHA-256 checksum no longer matches
 what was recorded when it ran, Mongor refuses to migrate and tells you which
 migration was modified.
+
+The history collection carries a unique index on `version`, and the row is
+written *before* the script runs. That insert is the lock: two `mongor migrate`
+runs cannot both apply the same migration, because the second one's insert is
+rejected and the run stops. It does not serialise a whole run — two runs can
+still apply *different* pending migrations at the same time — so a distributed
+lock is still worth having.
 
 ## Requirements
 

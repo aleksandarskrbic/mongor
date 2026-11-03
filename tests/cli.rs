@@ -425,3 +425,86 @@ fn rollback_refuses_to_run_without_confirmation() {
     assert_eq!(project.recorded_status(1).as_deref(), Some("success"));
     assert_eq!(project.eval("print(db.users.countDocuments())"), "1");
 }
+
+#[test]
+fn migrate_creates_the_unique_version_index() {
+    let project = Project::new("mongor_it_index");
+    project.write("00001_add_user.up.js", r#"db.users.insertOne({ n: 1 });"#);
+
+    project
+        .mongor()
+        .args(["migrate", "--env", "test", "--yes"])
+        .assert()
+        .success();
+
+    assert_eq!(
+        project.eval(
+            r#"print(db.mongor_migrations.getIndexes()
+                 .filter(i => i.name === "version_1" && i.unique === true).length)"#
+        ),
+        "1"
+    );
+
+    // The index, not mongor, is what makes a second row impossible.
+    let rejected = project.eval(
+        r#"try {
+             db.mongor_migrations.insertOne({ version: 1, name: "dupe" });
+             print("inserted");
+           } catch (e) {
+             print(e.code);
+           }"#,
+    );
+    assert_eq!(rejected, "11000");
+}
+
+#[test]
+fn migrate_refuses_a_version_that_already_has_a_row() {
+    let project = Project::new("mongor_it_duplicate");
+    project.write("00001_add_user.up.js", r#"db.users.insertOne({ n: 1 });"#);
+
+    // A status mongor does not know is invisible to both `applied` and
+    // `unfinished`, so 00001 looks pending and the insert is what catches it.
+    // Deterministic, unlike racing two real runs.
+    project.eval(
+        r#"db.mongor_migrations.insertOne({
+             version: 1,
+             name: "add_user",
+             fileName: "00001_add_user.up.js",
+             checksum: "sha256:0",
+             status: "somethingelse",
+             startedAt: new Date(),
+             finishedAt: null,
+             executionTimeMs: null,
+           });"#,
+    );
+
+    project
+        .mongor()
+        .args(["migrate", "--env", "test", "--yes"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("already has a row for 00001"));
+
+    // Refused before the script ran.
+    assert_eq!(project.eval("print(db.users.countDocuments())"), "0");
+}
+
+#[test]
+fn status_does_not_create_the_collection() {
+    let project = Project::new("mongor_it_readonly");
+    project.write("00001_add_user.up.js", r#"db.users.insertOne({ n: 1 });"#);
+
+    project
+        .mongor()
+        .args(["status", "--env", "test"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("pending"));
+
+    // The index is created by the commands that write, so a read-only command
+    // leaves a database it has never migrated completely untouched.
+    assert_eq!(
+        project.eval(r#"print(db.getCollectionNames().length)"#),
+        "0"
+    );
+}

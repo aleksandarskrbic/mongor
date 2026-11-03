@@ -38,6 +38,7 @@ impl Baseline {
         }
 
         let version = self.resolve_version()?;
+        self.store.ensure_version_index().await?;
         self.store.set_baseline(version).await?;
 
         println!(

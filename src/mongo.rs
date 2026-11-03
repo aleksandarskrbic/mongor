@@ -1,10 +1,20 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use futures_util::TryStreamExt;
 use mongodb::bson::{Bson, DateTime, doc, to_bson};
-use mongodb::{Collection, Database};
+use mongodb::error::{ErrorKind, WriteFailure};
+use mongodb::options::IndexOptions;
+use mongodb::{Collection, Database, IndexModel};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::time::Duration;
+
+/// The name the driver would generate for `{ version: 1 }` anyway, spelled out
+/// so the errors that mention the index can name it.
+const VERSION_INDEX: &str = "version_1";
+
+const DUPLICATE_KEY: i32 = 11000;
+const INDEX_OPTIONS_CONFLICT: i32 = 85;
+const INDEX_KEY_SPECS_CONFLICT: i32 = 86;
 
 /// One row of migration history. This is a stored format: renaming a field or
 /// changing `rename_all` invalidates every record already in the collection.
@@ -68,22 +78,90 @@ impl Store {
         self.migrations.name()
     }
 
-    /// Writes the row before the migration runs, replacing anything left by an
-    /// earlier attempt: the history holds one row per version.
+    /// Creates the unique index that makes concurrent runs safe: whoever
+    /// inserts the row for a version owns it, and the other run is refused
+    /// instead of applying the same migration twice.
+    ///
+    /// Called by the commands that insert rows rather than by `connect`:
+    /// `createIndexes` writes, and would also create the collection, which is
+    /// not something `status` may do to a database it only reads.
+    pub async fn ensure_version_index(&self) -> Result<()> {
+        let index = IndexModel::builder()
+            .keys(doc! { "version": 1 })
+            .options(
+                IndexOptions::builder()
+                    .name(VERSION_INDEX.to_string())
+                    .unique(true)
+                    .build(),
+            )
+            .build();
+
+        let Err(error) = self.migrations.create_index(index).await else {
+            return Ok(());
+        };
+
+        let collection = self.migrations.name();
+        match error_code(&error) {
+            // The same unique index exists under a name someone else chose, so
+            // what we wanted is already true.
+            Some(INDEX_OPTIONS_CONFLICT) => Ok(()),
+            Some(INDEX_KEY_SPECS_CONFLICT) => bail!(
+                "{collection} already has a different index named `{VERSION_INDEX}`\n\
+                 Drop it, then run the command again:\n  \
+                 db.getCollection(\"{collection}\").dropIndex(\"{VERSION_INDEX}\")"
+            ),
+            Some(DUPLICATE_KEY) => bail!(
+                "{collection} has more than one row for the same version, so `{VERSION_INDEX}` cannot be created\n\
+                 Find them and keep one row per version:\n  \
+                 db.getCollection(\"{collection}\").aggregate([{{ $group: {{ _id: \"$version\", rows: {{ $sum: 1 }} }} }}, {{ $match: {{ rows: {{ $gt: 1 }} }} }}])"
+            ),
+            _ => Err(error).with_context(|| {
+                format!(
+                    "failed to create `{VERSION_INDEX}` on {collection}\n\
+                     Create it by hand if mongor's database user may not:\n  \
+                     db.getCollection(\"{collection}\").createIndex({{ version: 1 }}, {{ unique: true, name: \"{VERSION_INDEX}\" }})"
+                )
+            }),
+        }
+    }
+
+    /// Writes the row before the migration runs. The insert is also the lock:
+    /// the unique index on `version` lets one run own a version, so a second
+    /// `mongor migrate` is refused here rather than applying the file again.
+    ///
+    /// Nothing is ever replaced - `migrate` refuses to go on while any row is
+    /// unfinished, and skips versions that are applied or baselined, so a row
+    /// for a pending version can only be another run's, or one mongor did not
+    /// write.
     pub async fn start(&self, record: &MigrationRecord) -> Result<()> {
-        self.migrations
-            .replace_one(doc! { "version": record.version }, record)
-            .upsert(true)
-            .await
-            .with_context(|| {
+        if let Err(error) = self.migrations.insert_one(record).await {
+            if error_code(&error) == Some(DUPLICATE_KEY) {
+                return Err(self.already_has_a_row(record.version));
+            }
+
+            return Err(error).with_context(|| {
                 format!(
                     "failed to record {} in {}",
                     record.file_name,
                     self.migrations.name()
                 )
-            })?;
+            });
+        }
 
         Ok(())
+    }
+
+    /// Something already holds the row for this version. Almost always another
+    /// run that inserted first; otherwise a row mongor cannot see, because its
+    /// status is not one of the five it knows.
+    fn already_has_a_row(&self, version: u32) -> anyhow::Error {
+        anyhow!(
+            "{} already has a row for {version:05}\n  \
+             another mongor run may own it - wait for it to finish, then `mongor status`\n  \
+             otherwise inspect it:  db.getCollection(\"{}\").findOne({{ version: {version} }})",
+            self.migrations.name(),
+            self.migrations.name()
+        )
     }
 
     pub async fn finish(
@@ -288,10 +366,15 @@ impl Store {
             execution_time_ms: None,
         };
 
-        self.migrations
-            .insert_one(&record)
-            .await
-            .with_context(|| format!("failed to write baseline to {}", self.migrations.name()))?;
+        if let Err(error) = self.migrations.insert_one(&record).await {
+            if error_code(&error) == Some(DUPLICATE_KEY) {
+                return Err(self.already_has_a_row(version));
+            }
+
+            return Err(error).with_context(|| {
+                format!("failed to write baseline to {}", self.migrations.name())
+            });
+        }
 
         Ok(())
     }
@@ -311,6 +394,17 @@ impl Store {
             .with_context(|| format!("failed to read {}", self.migrations.name()))?;
 
         Ok(found.into_iter().map(|r| (r.version, r)).collect())
+    }
+}
+
+/// The server reports a duplicate key as a write error on an insert and as a
+/// command error on `createIndexes`, so both shapes have to be unwrapped.
+/// `mongodb::error::Error::code` would do this, but the driver keeps it private.
+fn error_code(error: &mongodb::error::Error) -> Option<i32> {
+    match error.kind.as_ref() {
+        ErrorKind::Write(WriteFailure::WriteError(write_error)) => Some(write_error.code),
+        ErrorKind::Command(command_error) => Some(command_error.code),
+        _ => None,
     }
 }
 
