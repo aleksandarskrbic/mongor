@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Formatting and lints need no database, so they fail in seconds rather than
+  # after waiting for MongoDB to come up.
+  check:
+    name: fmt + clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - run: cargo fmt --all --check
+
+      # --all-targets lints the integration tests too, not just the binary.
+      - run: cargo clippy --all-targets -- -D warnings
+
+  test:
+    name: test
+    runs-on: ubuntu-latest
+
+    services:
+      mongo:
+        image: mongo:8
+        ports:
+          - 27017:27017
+        # The runner reaches the container through the mapped port, so the tests
+        # wait on localhost rather than on a service hostname.
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.adminCommand({ ping: 1 })'"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+
+    env:
+      # The fixture defaults to this, but CI states it so a change to the
+      # default can never silently point the suite at the wrong database.
+      MONGOR_TEST_URI: mongodb://localhost:27017
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      # mongor shells out to mongosh, so the tests need it on PATH. npm is
+      # already on the runner and installs it in seconds; MongoDB's apt
+      # repository takes considerably longer.
+      - name: Install mongosh
+        run: npm install -g mongosh
+
+      - run: mongosh --version
+
+      - run: cargo test --all-targets
