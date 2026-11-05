@@ -5,7 +5,8 @@ use std::path::PathBuf;
 use tempfile::TempDir;
 
 /// A throwaway mongor project: a temporary directory with a `mongor.toml`
-/// pointing at its own database, so tests can run in parallel.
+/// pointing at its own database, so tests can run in parallel - and so two
+/// whole runs against one mongod stay out of each other's way.
 struct Project {
     dir: TempDir,
     database: String,
@@ -13,6 +14,15 @@ struct Project {
 
 impl Project {
     fn new(database: &str) -> Project {
+        // The caller's name separates tests within a run; the pid separates one
+        // run from another. A pid is unique among processes that are alive at the
+        // same time, which is exactly the collision that matters here - two
+        // suites against one mongod otherwise share every row, and fail in ways
+        // that cannot happen in isolation. A random suffix would only make that
+        // unlikely, and would need a `OnceLock` to be drawn once per process
+        // rather than once per test.
+        let database = format!("{database}_{}", std::process::id());
+
         let dir = TempDir::new().unwrap();
         fs::create_dir(dir.path().join("migrations")).unwrap();
 
@@ -31,10 +41,7 @@ database = "{database}"
         )
         .unwrap();
 
-        let project = Project {
-            dir,
-            database: database.to_string(),
-        };
+        let project = Project { dir, database };
 
         // Rows left by a previous run would make `migrate` report nothing to do,
         // so every test starts from an empty database.
