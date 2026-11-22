@@ -71,6 +71,7 @@ syntax error, and the shell API is awaited for you.
 [migrations]
 path = "migrations"
 collection = "mongor_migrations"
+# timeout_seconds = 3600   # optional; no limit by default
 
 [environments.dev]
 uri_env = "MONGO_DEV_URI"
@@ -137,6 +138,22 @@ mongor migrate --env prod --dry-run
 
 It needs `mongosh` on `PATH` like a real run does, because a plan that ignores a
 precondition of the run is not a plan.
+
+`--timeout` caps how long a single script may run, and `[migrations]
+timeout_seconds` sets the same cap for every run. **There is no default, on
+purpose.** A backfill can legitimately run for hours, and MongoDB migrations are
+not atomic, so a timeout firing part-way through creates exactly the
+half-applied state it is meant to prevent - whereas a hang is at least visible.
+Set one when you know what a given migration should cost:
+
+```sh
+mongor migrate --env prod --yes --timeout 600   # overrides mongor.toml
+mongor rollback --env prod --yes --timeout 60
+```
+
+When it fires, mongosh is killed and the migration is recorded as `failed`, the
+same as any other interrupted run - `mongor resolve` is how you decide what
+actually happened. Timing out does **not** undo the part that already ran.
 
 When a migration fails or its process is lost, the row it left behind blocks
 `migrate` and `rollback` until a human looks at the database. `mongor resolve`

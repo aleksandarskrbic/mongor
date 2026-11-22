@@ -19,6 +19,13 @@ pub struct Config {
 pub struct MigrationsConfig {
     pub path: PathBuf,
     pub collection: String,
+    /// How long one script may run before mongor kills it.
+    ///
+    /// Absent means no limit, and that is the default on purpose: a backfill can
+    /// legitimately run for hours, and MongoDB migrations are not atomic, so a
+    /// timeout firing part-way through creates exactly the half-applied state it
+    /// is meant to prevent. A hang is at least visible.
+    pub timeout_seconds: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -80,6 +87,26 @@ pub fn resolve_uri(environment: &Environment) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every config written before the setting existed omits it, and
+    /// `deny_unknown_fields` makes the shape of this struct the contract.
+    #[test]
+    fn a_config_without_a_timeout_still_parses() {
+        let cfg: Config = toml::from_str(
+            r#"
+[migrations]
+path = "migrations"
+collection = "mongor_migrations"
+
+[environments.dev]
+uri_env = "MONGO_DEV_URI"
+database = "myapp_dev"
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(cfg.migrations.timeout_seconds, None);
+    }
 
     #[test]
     fn accepts_plausible_database_names() {

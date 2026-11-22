@@ -1393,3 +1393,60 @@ fn wait_until(mut condition: impl FnMut() -> bool, what: &str) {
 
     panic!("timed out after 10s waiting for {what}");
 }
+
+/// Without a limit a hung script blocks the run for ever, with no way out but a
+/// signal. The limit is opt-in, so this is the only test that sets one.
+#[test]
+fn migrate_kills_a_script_that_outruns_its_timeout() {
+    let project = Project::new("mongor_it_timeout");
+
+    project.write(
+        "00001_slow.up.js",
+        r#"db.marks.insertOne({ at: "before" });
+sleep(3000);
+db.marks.insertOne({ at: "after" });"#,
+    );
+
+    project
+        .mongor()
+        .args(["migrate", "--env", "test", "--yes", "--timeout", "1"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("did not finish within 1s"));
+
+    assert_eq!(project.recorded_status(1).as_deref(), Some("failed"));
+
+    // Past the script's own sleep, so a mongosh that survived being timed out
+    // would have written its second mark by now.
+    std::thread::sleep(std::time::Duration::from_millis(3000));
+    assert_eq!(marks(&project), 1, "mongosh outlived its timeout");
+}
+
+/// Zero would have to mean either "no limit" or "kill it immediately", and
+/// guessing wrong is worse than refusing.
+#[test]
+fn migrate_rejects_a_zero_timeout() {
+    let project = Project::new("mongor_it_timeout_zero");
+
+    project
+        .mongor()
+        .args(["migrate", "--env", "test", "--yes", "--timeout", "0"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("0 is not in 1.."));
+}
+
+/// A script well inside its limit is not affected by having one.
+#[test]
+fn migrate_leaves_a_script_that_finishes_in_time_alone() {
+    let project = Project::new("mongor_it_timeout_ok");
+    project.write("00001_quick.up.js", r#"db.users.insertOne({ n: 1 });"#);
+
+    project
+        .mongor()
+        .args(["migrate", "--env", "test", "--yes", "--timeout", "30"])
+        .assert()
+        .success();
+
+    assert_eq!(project.recorded_status(1).as_deref(), Some("success"));
+}

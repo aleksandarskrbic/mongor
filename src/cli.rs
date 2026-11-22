@@ -77,6 +77,10 @@ pub struct MigrateArgs {
     #[arg(long, value_name = "VERSION")]
     pub to: Option<u32>,
 
+    /// Seconds one script may run before it is killed; overrides mongor.toml
+    #[arg(long, value_name = "SECONDS", value_parser = clap::value_parser!(u64).range(1..))]
+    pub timeout: Option<u64>,
+
     /// Apply without asking for confirmation
     #[arg(long)]
     pub yes: bool,
@@ -102,6 +106,10 @@ pub struct RollbackArgs {
     /// Environment from mongor.toml to target
     #[arg(long)]
     pub env: String,
+
+    /// Seconds one script may run before it is killed; overrides mongor.toml
+    #[arg(long, value_name = "SECONDS", value_parser = clap::value_parser!(u64).range(1..))]
+    pub timeout: Option<u64>,
 
     /// Roll back without asking for confirmation
     #[arg(long)]

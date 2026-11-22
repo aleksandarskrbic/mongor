@@ -7,7 +7,7 @@ use anyhow::{Context, Result, bail};
 use mongodb::bson::DateTime;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 /// Applies all pending migrations.
 pub struct Migrate {
@@ -17,12 +17,19 @@ pub struct Migrate {
     mongosh: Mongosh,
     migrations_dir: PathBuf,
     to: Option<u32>,
+    timeout: Option<Duration>,
     yes: bool,
     dry_run: bool,
 }
 
 impl Migrate {
-    pub async fn new(env: String, to: Option<u32>, yes: bool, dry_run: bool) -> Result<Self> {
+    pub async fn new(
+        env: String,
+        to: Option<u32>,
+        timeout: Option<u64>,
+        yes: bool,
+        dry_run: bool,
+    ) -> Result<Self> {
         let (workspace, mongosh) = Workspace::open_with_mongosh(&env).await?;
 
         Ok(Self {
@@ -32,6 +39,9 @@ impl Migrate {
             mongosh,
             migrations_dir: workspace.migrations_dir,
             to,
+            // `--timeout` wins over the config, so one risky run can be capped
+            // without editing a file every environment shares.
+            timeout: timeout.map(Duration::from_secs).or(workspace.timeout),
             yes,
             dry_run,
         })
@@ -160,7 +170,12 @@ impl Migrate {
         let started = Instant::now();
         let outcome = self
             .mongosh
-            .run_script(&migration.path, &self.uri, self.store.database_name())
+            .run_script(
+                &migration.path,
+                &self.uri,
+                self.store.database_name(),
+                self.timeout,
+            )
             .await;
         let elapsed = started.elapsed().as_millis().try_into().unwrap_or(i64::MAX);
 

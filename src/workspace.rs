@@ -3,6 +3,7 @@ use crate::mongo::Store;
 use crate::mongosh::Mongosh;
 use anyhow::Result;
 use std::path::PathBuf;
+use std::time::Duration;
 
 /// The `mongor.toml` values a command needs, and the connection they resolve to.
 ///
@@ -22,6 +23,8 @@ pub struct Workspace {
     pub uri: String,
     pub store: Store,
     pub migrations_dir: PathBuf,
+    /// From `[migrations] timeout_seconds`. `None` is no limit.
+    pub timeout: Option<Duration>,
 }
 
 impl Workspace {
@@ -39,6 +42,7 @@ impl Workspace {
             uri,
             store,
             migrations_dir: cfg.migrations.path,
+            timeout: cfg.migrations.timeout_seconds.map(Duration::from_secs),
         })
     }
 
@@ -65,6 +69,7 @@ impl Workspace {
             uri,
             store,
             migrations_dir: cfg.migrations.path,
+            timeout: cfg.migrations.timeout_seconds.map(Duration::from_secs),
         };
 
         Ok((workspace, mongosh))

@@ -5,7 +5,7 @@ use crate::prompt::confirm;
 use crate::workspace::Workspace;
 use anyhow::{Context, Result, bail};
 use std::path::PathBuf;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 /// Undoes the most recently applied migration by running its `U` script.
 pub struct Rollback {
@@ -14,11 +14,12 @@ pub struct Rollback {
     store: Store,
     mongosh: Mongosh,
     migrations_dir: PathBuf,
+    timeout: Option<Duration>,
     yes: bool,
 }
 
 impl Rollback {
-    pub async fn new(env: String, yes: bool) -> Result<Self> {
+    pub async fn new(env: String, timeout: Option<u64>, yes: bool) -> Result<Self> {
         let (workspace, mongosh) = Workspace::open_with_mongosh(&env).await?;
 
         Ok(Self {
@@ -27,6 +28,7 @@ impl Rollback {
             store: workspace.store,
             mongosh,
             migrations_dir: workspace.migrations_dir,
+            timeout: timeout.map(Duration::from_secs).or(workspace.timeout),
             yes,
         })
     }
@@ -95,7 +97,7 @@ impl Rollback {
         let started = Instant::now();
         let outcome = self
             .mongosh
-            .run_script(&script, &self.uri, self.store.database_name())
+            .run_script(&script, &self.uri, self.store.database_name(), self.timeout)
             .await;
 
         match outcome {

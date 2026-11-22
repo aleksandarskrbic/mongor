@@ -1,6 +1,7 @@
 use anyhow::{Context, Result, bail};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::time::Duration;
 use tokio::process::Command;
 
 /// The URI reaches mongosh through the environment, not `argv`, which `ps`
@@ -39,10 +40,17 @@ impl Mongosh {
         &self.version
     }
 
-    /// Runs `script` with `db` bound to `database` on `uri`.
+    /// Runs `script` with `db` bound to `database` on `uri`, killing it if it
+    /// outlives `timeout`.
     ///
     /// stdout and stderr are inherited: a migration's output is the audit trail.
-    pub async fn run_script(&self, script: &Path, uri: &str, database: &str) -> Result<()> {
+    pub async fn run_script(
+        &self,
+        script: &Path,
+        uri: &str,
+        database: &str,
+        timeout: Option<Duration>,
+    ) -> Result<()> {
         // mongosh has no `--db` flag — the database comes from the URI path, and
         // a URI without one silently means `test`. `--eval` runs before `--file`
         // and shares its global scope, so this is the `db` the script sees.
@@ -65,6 +73,18 @@ impl Mongosh {
 
         let status = tokio::select! {
             status = child.wait() => status.with_context(|| not_runnable(&self.program))?,
+
+            limit = elapsed(timeout) => {
+                // Same kill and the same honest row as a signal: from the
+                // database's point of view there is no difference between an
+                // operator stopping the run and mongor deciding to.
+                child.kill().await.ok();
+
+                bail!(
+                    "mongosh did not finish within {}s, so it was killed - the database may be half-migrated",
+                    limit.as_secs()
+                );
+            }
 
             signal = interrupted() => {
                 // `kill` here is SIGKILL and unconditional. A migration halfway
@@ -123,6 +143,20 @@ async fn interrupted() -> &'static str {
         Some(()) = interrupt.recv() => "SIGINT",
         Some(()) = terminate.recv() => "SIGTERM",
         else => std::future::pending().await,
+    }
+}
+
+/// Resolves once `timeout` has passed, or never when there is none.
+///
+/// Returns the limit it waited for, so the caller can name it without unwrapping
+/// an `Option` it already knows is `Some`.
+async fn elapsed(timeout: Option<Duration>) -> Duration {
+    match timeout {
+        Some(limit) => {
+            tokio::time::sleep(limit).await;
+            limit
+        }
+        None => std::future::pending().await,
     }
 }
 
