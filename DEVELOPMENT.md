@@ -6,6 +6,7 @@ How to build `mongor`, run a local MongoDB, and exercise the CLI by hand.
 
 | Tool | Why | Check |
 | --- | --- | --- |
+| Linux or macOS | mongor stops a migration with unix signals | `uname` |
 | Rust (edition 2024) | builds the CLI | `cargo --version` |
 | Docker | runs a local MongoDB | `docker --version` |
 | `mongosh` | executes migration scripts | `mongosh --version` |

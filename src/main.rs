@@ -1,3 +1,8 @@
+#[cfg(not(unix))]
+compile_error!(
+    "mongor supports Linux and macOS only - it relies on unix signals to stop a migration safely"
+);
+
 mod cli;
 mod commands;
 mod config;

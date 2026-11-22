@@ -216,8 +216,14 @@ lock is still worth having.
 
 ## Requirements
 
+- Linux or macOS
 - Rust (edition 2024)
 - `mongosh` on your `PATH`
+
+Windows is not supported. Mongor runs each migration as a `mongosh` child
+process and has to kill it when the run is signalled, which needs SIGTERM; a
+build on Windows fails with that message rather than silently losing the
+guarantee.
 
 ## Building
 

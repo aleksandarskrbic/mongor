@@ -1312,3 +1312,84 @@ fn migrate_to_allows_a_target_below_an_applied_version() {
     );
     assert_eq!(project.recorded_status(4), None);
 }
+
+/// SIGTERM is what a cancelled CI job, a stopping container and a plain `kill`
+/// all send, and it reaches mongor alone - so this is the case where mongosh
+/// used to be orphaned and carry on writing to a database whose row still read
+/// `running`.
+#[test]
+fn a_terminated_migrate_kills_mongosh_instead_of_orphaning_it() {
+    let project = Project::new("mongor_it_sigterm");
+
+    // Two writes with a sleep between them. The first proves the script really
+    // started; the absence of the second proves it was stopped rather than left
+    // running, which is the whole point of the test.
+    project.write(
+        "00001_slow.up.js",
+        r#"db.marks.insertOne({ at: "before" });
+sleep(2000);
+db.marks.insertOne({ at: "after" });"#,
+    );
+
+    // Not assert_cmd: this test needs the pid while the child is still running,
+    // and `assert()` only hands back a finished process.
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_mongor"))
+        .args(["migrate", "--env", "test", "--yes"])
+        .current_dir(project.dir.path())
+        .env("MONGOR_TEST_URI", uri())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+
+    // Signalling before the first insert lands would prove nothing: the script
+    // would not yet have reached the sleep it is supposed to be killed during.
+    wait_until(
+        || marks(&project) == 1,
+        "the migration to write its first mark",
+    );
+
+    assert!(
+        std::process::Command::new("kill")
+            .args(["-TERM", &child.id().to_string()])
+            .status()
+            .unwrap()
+            .success()
+    );
+
+    let status = child.wait().unwrap();
+    assert!(!status.success(), "a terminated migrate must not exit 0");
+
+    // Marked, not left running: the next `migrate` can say what happened and
+    // point at `mongor resolve` instead of refusing with nothing to explain it.
+    assert_eq!(project.recorded_status(1).as_deref(), Some("failed"));
+
+    // Long enough for the script's own sleep to have elapsed, so an orphaned
+    // mongosh would have written its second mark by now.
+    std::thread::sleep(std::time::Duration::from_millis(3500));
+    assert_eq!(
+        marks(&project),
+        1,
+        "mongosh outlived the run that started it"
+    );
+}
+
+fn marks(project: &Project) -> u32 {
+    project
+        .eval("print(db.marks.countDocuments({}))")
+        .parse()
+        .unwrap()
+}
+
+/// Polls until `condition` holds, so a test waits for the work rather than for
+/// a fixed delay that is either flaky or slow.
+fn wait_until(mut condition: impl FnMut() -> bool, what: &str) {
+    for _ in 0..100 {
+        if condition() {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+
+    panic!("timed out after 10s waiting for {what}");
+}
