@@ -1396,30 +1396,48 @@ fn wait_until(mut condition: impl FnMut() -> bool, what: &str) {
 
 /// Without a limit a hung script blocks the run for ever, with no way out but a
 /// signal. The limit is opt-in, so this is the only test that sets one.
+///
+/// Five seconds rather than one because the limit starts at `spawn`, so it also
+/// covers mongosh booting and connecting. On a two-core CI runner with 46 tests
+/// spawning it at once, that alone outran a one-second limit and the script was
+/// killed before it had written anything.
 #[test]
 fn migrate_kills_a_script_that_outruns_its_timeout() {
     let project = Project::new("mongor_it_timeout");
 
+    // Writes five marks a second for as long as it is allowed to, so the test
+    // can tell a child that is dead from one that is merely detached by whether
+    // the count moves.
     project.write(
         "00001_slow.up.js",
-        r#"db.marks.insertOne({ at: "before" });
-sleep(3000);
-db.marks.insertOne({ at: "after" });"#,
+        r#"db.marks.insertOne({ at: 0 });
+for (let i = 1; i < 100; i++) {
+  sleep(200);
+  db.marks.insertOne({ at: i });
+}"#,
     );
 
     project
         .mongor()
-        .args(["migrate", "--env", "test", "--yes", "--timeout", "1"])
+        .args(["migrate", "--env", "test", "--yes", "--timeout", "5"])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("did not finish within 1s"));
+        .stderr(predicate::str::contains("did not finish within 5s"));
 
     assert_eq!(project.recorded_status(1).as_deref(), Some("failed"));
 
-    // Past the script's own sleep, so a mongosh that survived being timed out
-    // would have written its second mark by now.
-    std::thread::sleep(std::time::Duration::from_millis(3000));
-    assert_eq!(marks(&project), 1, "mongosh outlived its timeout");
+    let at_kill = marks(&project);
+    assert!(
+        at_kill > 0,
+        "the script never started, so nothing was timed out"
+    );
+
+    // A mongosh that survived would write about seven more marks in this
+    // window. Waiting for the count to stay put asks whether the child is gone,
+    // where waiting out the script's own sleep only guessed how long it had
+    // left.
+    std::thread::sleep(std::time::Duration::from_millis(1500));
+    assert_eq!(marks(&project), at_kill, "mongosh outlived its timeout");
 }
 
 /// Zero would have to mean either "no limit" or "kill it immediately", and
